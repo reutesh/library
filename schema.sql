@@ -1,0 +1,25 @@
+-- Run this in your Supabase SQL Editor (Dashboard > SQL Editor > New query)
+
+CREATE TABLE IF NOT EXISTS rooms (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS shelves (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  room_id BIGINT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  UNIQUE(room_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS books (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  title TEXT NOT NULL,
+  author TEXT,
+  isbn TEXT,
+  genre TEXT,
+  shelf_id BIGINT REFERENCES shelves(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

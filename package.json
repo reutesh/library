@@ -1,0 +1,29 @@
+{
+  "name": "library-manager",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build:server": "tsc",
+    "build:client": "esbuild src/client/app.ts --bundle --outfile=public/app.js --target=es2020 --format=iife",
+    "build": "npm run build:server && npm run build:client",
+    "start": "node dist/index.js",
+    "dev": "npm run build:client && tsx watch src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
