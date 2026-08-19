@@ -1,5 +1,12 @@
-const SUPABASE_URL = 'https://taxcwrlegxjomavwqars.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_ASKIw8Ydi6up6evrPiLQfQ_aYPQ8l6o';
+import 'dotenv/config';
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_KEY = process.env.SUPABASE_KEY!;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('Missing SUPABASE_URL or SUPABASE_KEY in environment variables');
+  process.exit(1);
+}
 
 const headers = {
   'apikey': SUPABASE_KEY,
