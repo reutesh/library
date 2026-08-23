@@ -484,3 +484,180 @@ nav {
   background: #3498db;
   color: white;
 }
+
+/* Login Screen */
+#login-screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #2c3e50;
+  z-index: 2000;
+  align-items: center;
+  justify-content: center;
+}
+
+#login-screen.active {
+  display: flex;
+}
+
+.login-card {
+  background: white;
+  padding: 2.5rem;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 380px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+}
+
+.login-card h1 {
+  text-align: center;
+  margin-bottom: 0.25rem;
+  font-size: 1.5rem;
+}
+
+.login-subtitle {
+  text-align: center;
+  color: #777;
+  margin-bottom: 1.5rem;
+}
+
+.login-error {
+  background: #fdecea;
+  border: 1px solid #e74c3c;
+  color: #c0392b;
+  padding: 0.5rem 0.75rem;
+  border-radius: 5px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* Header user box */
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: white;
+  font-weight: 500;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge-admin { background: #3498db; color: white; }
+.badge-editor { background: #f39c12; color: white; }
+.badge-viewer { background: #95a5a6; color: white; }
+
+.field-hint {
+  color: #999;
+  font-size: 0.8rem;
+}
+
+/* Pagination */
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+}
+
+.pagination-info {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.page-btn {
+  min-width: 36px;
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#page-size {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  background: white;
+  cursor: pointer;
+  margin-inline-start: 0.5rem;
+}
+
+/* Users table */
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.users-table th,
+.users-table td {
+  text-align: right;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #eee;
+}
+
+.users-table th {
+  background: #f8f9fa;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.users-table tr:last-child td {
+  border-bottom: none;
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: flex-start;
+}
+
+.rooms-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.4rem;
+}
+
+.room-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: normal !important;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 600px) {
+  .header-row { flex-direction: column; }
+  .user-box { align-self: flex-end; }
+}

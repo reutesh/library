@@ -15,11 +15,25 @@ const headers = {
   'Prefer': 'return=representation',
 };
 
-async function supaGet(table: string, query = '') {
+async function supaGet(table: string, query = ''): Promise<any[]> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return res.json() as Promise<any[]>;
+}
+
+async function supaGetWithCount(table: string, query = ''): Promise<{ data: any[]; total: number }> {
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
+  const res = await fetch(url, { headers: { ...headers, Prefer: 'count=exact' } });
+  if (!res.ok) throw new Error(await res.text());
+  const data = (await res.json()) as any[];
+  const range = res.headers.get('content-range');
+  let total = data.length;
+  if (range && range.includes('/')) {
+    const parsed = parseInt(range.split('/')[1], 10);
+    if (!Number.isNaN(parsed)) total = parsed;
+  }
+  return { data, total };
 }
 
 async function supaPost(table: string, body: Record<string, unknown>) {
@@ -30,7 +44,7 @@ async function supaPost(table: string, body: Record<string, unknown>) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
-  return (await res.json())[0];
+  return ((await res.json()) as any[])[0];
 }
 
 async function supaUpdate(table: string, id: number | string, body: Record<string, unknown>) {
@@ -41,7 +55,7 @@ async function supaUpdate(table: string, id: number | string, body: Record<strin
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
-  return (await res.json())[0];
+  return ((await res.json()) as any[])[0];
 }
 
 async function supaDelete(table: string, id: number | string) {
@@ -54,4 +68,4 @@ async function supaDelete(table: string, id: number | string) {
   return res.status === 204 || res.status === 200;
 }
 
-export { supaGet, supaPost, supaUpdate, supaDelete };
+export { supaGet, supaGetWithCount, supaPost, supaUpdate, supaDelete };

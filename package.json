@@ -7,6 +7,7 @@
     "build:server": "tsc",
     "build:client": "esbuild src/client/app.ts --bundle --outfile=public/app.js --target=es2020 --format=iife",
     "build": "npm run build:server && npm run build:client",
+    "typecheck:client": "tsc -p tsconfig.client.json",
     "start": "node dist/index.js",
     "dev": "npm run build:client && tsx watch src/index.ts"
   },
