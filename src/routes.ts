@@ -349,8 +349,19 @@ router.get('/books', async (req: Request, res: Response) => {
       filters.push(`author.ilike.${term}`);
     }
     if (search) {
-      const term = encodeURIComponent(`%${search}%`);
-      filters.push(`or(title.ilike.${term},author.ilike.${term},isbn.ilike.${term},genre.ilike.${term})`);
+      const term = encodeURIComponent(`%${search}%`)
+        .replace(/\(/g, '%28')
+        .replace(/\)/g, '%29')
+        .replace(/,/g, '%2C');
+      filters.push(`or=(title.ilike.${term},author.ilike.${term},isbn.ilike.${term},genre.ilike.${term})`);
+    }
+
+    const isAdminUser = req.user!.role === 'admin';
+    if (req.query.pending === '1') {
+      if (!isAdminUser) return res.status(403).json({ error: 'Admin permission required' });
+      filters.push('status=eq.pending');
+    } else if (!isAdminUser) {
+      filters.push(`or=(status.eq.approved,created_by.eq.${req.user!.id})`);
     }
 
     const query = 'select=*,shelves(room_id,name,rooms(name))&' + filters.join('&');
@@ -365,6 +376,8 @@ router.get('/books', async (req: Request, res: Response) => {
       shelf_id: b.shelf_id,
       room_id: b.shelves?.room_id ?? null,
       notes: b.notes,
+      status: b.status || 'approved',
+      created_by: b.created_by ?? null,
       shelf_name: b.shelves?.name || null,
       room_name: b.shelves?.rooms?.name || null,
       created_at: b.created_at,
@@ -381,6 +394,9 @@ router.get('/books/:id', async (req: Request, res: Response) => {
     const books = await supaGet('books', `id=eq.${req.params.id}&select=*,shelves(room_id,name,rooms(name))`);
     if (!books.length) return res.status(404).json({ error: 'Book not found' });
     const b = books[0];
+    if (b.status === 'pending' && req.user!.role !== 'admin' && b.created_by !== req.user!.id) {
+      return res.status(404).json({ error: 'Book not found' });
+    }
     res.json({
       id: b.id,
       title: b.title,
@@ -390,6 +406,8 @@ router.get('/books/:id', async (req: Request, res: Response) => {
       shelf_id: b.shelf_id,
       room_id: b.shelves?.room_id ?? null,
       notes: b.notes,
+      status: b.status,
+      created_by: b.created_by,
       shelf_name: b.shelves?.name || null,
       room_name: b.shelves?.rooms?.name || null,
     });
@@ -402,19 +420,29 @@ router.post('/books', async (req: Request, res: Response) => {
   const { title, author, isbn, genre, shelf_id, notes } = req.body;
   if (!title) return res.status(400).json({ error: 'Title is required' });
   try {
-    const targetRoom = shelf_id ? await getShelfRoomId(Number(shelf_id)) : null;
-    if (!(await canEditRoomLocation(req.user!, targetRoom))) {
-      return res.status(403).json({ error: 'No permission: books must be placed inside rooms you are allowed to edit' });
+    const user = req.user!;
+    let status = 'pending';
+    if (shelf_id) {
+      const targetRoom = await getShelfRoomId(Number(shelf_id));
+      if (!(await canEditRoomLocation(user, targetRoom))) {
+        return res.status(403).json({ error: 'No permission: books must be placed inside rooms you are allowed to edit' });
+      }
+      status = 'approved';
+    } else if (user.role === 'admin') {
+      status = 'approved';
     }
     const book = await supaPost('books', {
       title, author: author || null, isbn: isbn || null,
       genre: genre || null, shelf_id: shelf_id || null, notes: notes || null,
+      status,
+      created_by: user.id,
     });
     const full = await supaGet('books', `id=eq.${book.id}&select=*,shelves(room_id,name,rooms(name))`);
     const b = full[0];
     res.status(201).json({
       id: b.id, title: b.title, author: b.author, isbn: b.isbn,
       genre: b.genre, shelf_id: b.shelf_id, room_id: b.shelves?.room_id ?? null, notes: b.notes,
+      status: b.status, created_by: b.created_by,
       shelf_name: b.shelves?.name || null, room_name: b.shelves?.rooms?.name || null,
     });
   } catch (err: any) {
@@ -426,16 +454,32 @@ router.put('/books/:id', async (req: Request, res: Response) => {
   const { title, author, isbn, genre, shelf_id, notes } = req.body;
   if (!title) return res.status(400).json({ error: 'Title is required' });
   try {
-    const existing = await supaGet('books', `id=eq.${req.params.id}&select=id,shelf_id`);
+    const existing = await supaGet('books', `id=eq.${req.params.id}&select=id,shelf_id,status,created_by`);
     if (!existing.length) return res.status(404).json({ error: 'Book not found' });
-    const currentShelfId = existing[0].shelf_id;
+    const cur = existing[0];
     const newShelfId = shelf_id ? Number(shelf_id) : null;
-    if (!(await canEditBook(req.user!, currentShelfId, newShelfId))) {
-      return res.status(403).json({ error: 'No permission to edit this book' });
+    const user = req.user!;
+
+    let allowed = false;
+    if (user.role === 'admin') {
+      allowed = true;
+    } else if (cur.status === 'pending' && cur.created_by === user.id) {
+      if (newShelfId) {
+        const room = await getShelfRoomId(newShelfId);
+        if (!(await canEditRoomLocation(user, room))) {
+          return res.status(403).json({ error: 'No permission: you can only place books inside rooms you are allowed to edit' });
+        }
+      }
+      allowed = true;
+    } else {
+      allowed = await canEditBook(user, cur.shelf_id, newShelfId);
     }
+    if (!allowed) return res.status(403).json({ error: 'No permission to edit this book' });
+
     await supaUpdate('books', String(req.params.id), {
       title, author: author || null, isbn: isbn || null,
       genre: genre || null, shelf_id: newShelfId, notes: notes || null,
+      status: newShelfId ? 'approved' : cur.status,
       updated_at: new Date().toISOString(),
     });
     const books = await supaGet('books', `id=eq.${req.params.id}&select=*,shelves(room_id,name,rooms(name))`);
@@ -443,6 +487,7 @@ router.put('/books/:id', async (req: Request, res: Response) => {
     res.json({
       id: b.id, title: b.title, author: b.author, isbn: b.isbn,
       genre: b.genre, shelf_id: b.shelf_id, room_id: b.shelves?.room_id ?? null, notes: b.notes,
+      status: b.status, created_by: b.created_by,
       shelf_name: b.shelves?.name || null, room_name: b.shelves?.rooms?.name || null,
     });
   } catch (err: any) {
@@ -452,9 +497,11 @@ router.put('/books/:id', async (req: Request, res: Response) => {
 
 router.delete('/books/:id', async (req: Request, res: Response) => {
   try {
-    const existing = await supaGet('books', `id=eq.${req.params.id}&select=id,shelf_id`);
+    const existing = await supaGet('books', `id=eq.${req.params.id}&select=id,shelf_id,status,created_by`);
     if (!existing.length) return res.status(404).json({ error: 'Book not found' });
-    if (!(await canEditBook(req.user!, existing[0].shelf_id, existing[0].shelf_id))) {
+    const cur = existing[0];
+    const isPendingOwner = cur.status === 'pending' && cur.created_by === req.user!.id;
+    if (!(req.user!.role === 'admin' || isPendingOwner || (await canEditBook(req.user!, cur.shelf_id, cur.shelf_id)))) {
       return res.status(403).json({ error: 'No permission to delete this book' });
     }
     await supaDelete('books', String(req.params.id));
@@ -468,7 +515,7 @@ router.delete('/books/:id', async (req: Request, res: Response) => {
 
 router.get('/genres', async (_req: Request, res: Response) => {
   try {
-    const books = await supaGet('books', 'select=genre&genre=not.is.null&genre=neq.&order=genre.asc');
+    const books = await supaGet('books', 'select=genre&genre=not.is.null&genre=neq.&status=eq.approved&order=genre.asc');
     const genres = [...new Set(books.map((b: any) => b.genre))].sort();
     res.json(genres);
   } catch (err: any) {
@@ -480,7 +527,7 @@ router.get('/genres', async (_req: Request, res: Response) => {
 
 router.get('/authors', async (_req: Request, res: Response) => {
   try {
-    const books = await supaGet('books', 'select=author&author=not.is.null&author=neq.');
+    const books = await supaGet('books', 'select=author&author=not.is.null&author=neq.&status=eq.approved');
     const authors = [...new Set(books.map((b: any) => b.author))].sort();
     res.json(authors);
   } catch (err: any) {
@@ -493,12 +540,13 @@ router.get('/authors', async (_req: Request, res: Response) => {
 router.get('/stats', async (_req: Request, res: Response) => {
   try {
     const [books, rooms, shelves] = await Promise.all([
-      supaGetWithCount('books', 'select=id'),
+      supaGetWithCount('books', 'select=id&status=eq.approved'),
       supaGetWithCount('rooms', 'select=id'),
       supaGetWithCount('shelves', 'select=id'),
     ]);
-    const unassigned = await supaGetWithCount('books', 'select=id&shelf_id=is.null');
-    const allBooks = await supaGet('books', 'select=genre&genre=not.is.null&genre=neq.');
+    const unassigned = await supaGetWithCount('books', 'select=id&shelf_id=is.null&status=eq.approved');
+    const pendingBooks = await supaGetWithCount('books', 'select=id&status=eq.pending');
+    const allBooks = await supaGet('books', 'select=genre&genre=not.is.null&genre=neq.&status=eq.approved');
     const genreCount: Record<string, number> = {};
     allBooks.forEach((b: any) => { genreCount[b.genre] = (genreCount[b.genre] || 0) + 1; });
     const top_genres = Object.entries(genreCount)
@@ -511,6 +559,7 @@ router.get('/stats', async (_req: Request, res: Response) => {
       total_rooms: rooms.total,
       total_shelves: shelves.total,
       unassigned_books: unassigned.total,
+      pending_books: pendingBooks.total,
       top_genres,
     });
   } catch (err: any) {

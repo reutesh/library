@@ -9,6 +9,8 @@ interface Book {
   shelf_id: number | null;
   room_id: number | null;
   notes: string | null;
+  status: 'approved' | 'pending';
+  created_by: number | null;
   shelf_name: string | null;
   room_name: string | null;
 }
@@ -99,6 +101,7 @@ let pageSize = 24;
 let totalBooks = 0;
 let lastPageBooks: Book[] = [];
 let lastUsers: UserRow[] = [];
+let showPendingOnly = false;
 
 // ========== PERMISSIONS ==========
 
@@ -122,6 +125,7 @@ function canEditRoom(roomId: number | null | undefined): boolean {
 function canEditBook(book: Book): boolean {
   if (!currentUser) return false;
   if (currentUser.role === 'admin') return true;
+  if (book.status === 'pending') return book.created_by === currentUser.id;
   if (currentUser.role !== 'editor') return false;
   return book.room_id != null && currentUser.allowed_room_ids.includes(book.room_id);
 }
@@ -260,14 +264,18 @@ function loadView(view: string): void {
 
 async function loadDashboard(): Promise<void> {
   const [stats, unassigned] = await Promise.all([
-    api.get('/stats') as Promise<{ total_books: number; total_rooms: number; total_shelves: number; unassigned_books: number }>,
+    api.get('/stats') as Promise<{ total_books: number; total_rooms: number; total_shelves: number; unassigned_books: number; pending_books: number }>,
     api.get('/books?shelf_id=none&limit=8') as Promise<BooksPage>,
   ]);
+  const pendingCard = isAdmin()
+    ? `<div class="stat-card"><h3>${stats.pending_books}</h3><p>ממתינים לאישור</p></div>`
+    : '';
   document.getElementById('stats')!.innerHTML = `
     <div class="stat-card"><h3>${stats.total_books}</h3><p>ספרים</p></div>
     <div class="stat-card"><h3>${stats.total_rooms}</h3><p>חדרים</p></div>
     <div class="stat-card"><h3>${stats.total_shelves}</h3><p>מדפים</p></div>
     <div class="stat-card"><h3>${stats.unassigned_books}</h3><p>לא מוקצים</p></div>
+    ${pendingCard}
   `;
   const container = document.getElementById('unassigned-books')!;
   if (!unassigned.data.length) {
@@ -310,6 +318,7 @@ async function loadBooks(): Promise<void> {
   if (activeFilters.author) params.set('author', activeFilters.author);
   params.set('page', String(booksPage));
   params.set('limit', String(pageSize));
+  if (showPendingOnly && isAdmin()) params.set('pending', '1');
   try {
     const res = await api.get('/books?' + params.toString()) as BooksPage;
     totalBooks = res.total;
@@ -430,6 +439,7 @@ function setupFilterListeners(): void {
 
 function clearFilters(): void {
   activeFilters = { search: '', shelf_id: '', room_id: '', genre: '', author: '' };
+  showPendingOnly = false;
   booksPage = 1;
   (document.getElementById('book-search') as HTMLInputElement).value = '';
   (document.getElementById('filter-room') as HTMLSelectElement).value = '';
@@ -475,10 +485,14 @@ function switchToBooksDirect(): void {
 
 function resetBooksHeader(): void {
   const headerEl = document.getElementById('books-view-header')!;
+  const pendingBtn = isAdmin()
+    ? `<button class="btn btn-small ${showPendingOnly ? 'btn-primary' : 'btn-secondary'}" data-action="toggle-pending">ממתינים לאישור</button>`
+    : '';
   headerEl.innerHTML = `
     <h2>הספרים שלי</h2>
     <div class="actions">
       <input type="text" id="book-search" placeholder="חיפוש ספרים...">
+      ${pendingBtn}
       ${canCreateBooks() ? '<button class="btn btn-primary" id="btn-add-book">+ הוסף ספר</button>' : ''}
     </div>
   `;
@@ -500,6 +514,7 @@ function bookCard(book: Book): string {
   const location = book.room_name
     ? `<div class="location">${esc(book.room_name)} › ${esc(book.shelf_name!)}</div>`
     : '<div class="location" style="color:#999">לא מוקצה</div>';
+  const pendingTag = book.status === 'pending' ? '<span class="tag tag-pending">ממתין לאישור</span>' : '';
   const actions = canEditBook(book)
     ? `<div class="actions">
         <button class="btn btn-primary btn-small" data-action="edit-book" data-id="${book.id}">ערוך</button>
@@ -511,6 +526,7 @@ function bookCard(book: Book): string {
       <h4>${esc(book.title)}</h4>
       ${book.author ? `<div class="author">${esc(book.author)}</div>` : ''}
       <div class="meta">
+        ${pendingTag}
         ${book.isbn ? `<span class="tag">ISBN: ${esc(book.isbn)}</span>` : ''}
         ${book.genre ? `<span class="tag">${esc(book.genre)}</span>` : ''}
       </div>
@@ -939,6 +955,13 @@ function initDelegatedHandlers(): void {
       case 'add-shelf': openShelfModal(roomId); break;
       case 'view-shelf': viewShelfBooks(id, name); break;
       case 'clear-filters': clearFilters(); break;
+      case 'toggle-pending': {
+        showPendingOnly = !showPendingOnly;
+        target.className = `btn btn-small ${showPendingOnly ? 'btn-primary' : 'btn-secondary'}`;
+        booksPage = 1;
+        loadBooks();
+        break;
+      }
       case 'goto-page':
         booksPage = Number(target.dataset.page);
         loadBooks();

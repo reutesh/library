@@ -563,6 +563,11 @@ nav {
 .badge-editor { background: #f39c12; color: white; }
 .badge-viewer { background: #95a5a6; color: white; }
 
+.tag-pending {
+  background: #f39c12;
+  color: white;
+}
+
 .field-hint {
   color: #999;
   font-size: 0.8rem;
