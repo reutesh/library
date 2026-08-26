@@ -1,3 +1,25 @@
+/*
+ * style.css — Library Manager styles
+ *
+ * Sections:
+ *   1. Reset & base
+ *   2. Header & navigation
+ *   3. Buttons
+ *   4. Stats grid (dashboard)
+ *   5. Book grid & cards
+ *   6. Rooms & shelves
+ *   7. Modal & forms
+ *   8. Filter bar
+ *   9. Pagination
+ *  10. Users table
+ *  11. Genre autocomplete
+ *  12. Login screen
+ *  13. Header user box & role badges
+ *  14. Responsive breakpoints
+ */
+
+/* ── 1. Reset & base ────────────────────────────────────── */
+
 * {
   margin: 0;
   padding: 0;
@@ -17,6 +39,8 @@ body {
   padding: 0 20px;
 }
 
+/* ── 2. Header & navigation ─────────────────────────────── */
+
 header {
   background: #2c3e50;
   color: white;
@@ -27,6 +51,13 @@ header {
 header h1 {
   font-size: 1.8rem;
   margin-bottom: 1rem;
+}
+
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
 }
 
 nav {
@@ -56,36 +87,7 @@ nav {
   background: #3498db;
 }
 
-.view {
-  display: none;
-}
-
-.view.active {
-  display: block;
-}
-
-.view-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-#book-search {
-  padding: 0.5rem 1rem;
-  border: 1px solid #ddd;
-  border-radius: 5px;
-  font-size: 0.9rem;
-  width: 250px;
-}
+/* ── 3. Buttons ─────────────────────────────────────────── */
 
 .btn {
   padding: 0.5rem 1rem;
@@ -128,7 +130,12 @@ nav {
   font-size: 0.8rem;
 }
 
-/* Stats Grid */
+.btn-block {
+  width: 100%;
+}
+
+/* ── 4. Stats grid (dashboard) ──────────────────────────── */
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -154,7 +161,8 @@ nav {
   margin-top: 0.5rem;
 }
 
-/* Book Grid */
+/* ── 5. Book grid & cards ───────────────────────────────── */
+
 .book-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -212,7 +220,8 @@ nav {
   margin-top: 0.5rem;
 }
 
-/* Rooms */
+/* ── 6. Rooms & shelves ─────────────────────────────────── */
+
 .rooms-container {
   display: flex;
   flex-direction: column;
@@ -285,6 +294,15 @@ nav {
   gap: 0.5rem;
 }
 
+.shelf-card[data-action="view-shelf"] {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.shelf-card[data-action="view-shelf"]:hover {
+  background: #eef3f7;
+}
+
 .add-shelf-btn {
   background: #ecf0f1;
   border: 2px dashed #bdc3c7;
@@ -301,7 +319,8 @@ nav {
   color: #3498db;
 }
 
-/* Modal */
+/* ── 7. Modal & forms ───────────────────────────────────── */
+
 .modal {
   display: none;
   position: fixed;
@@ -348,7 +367,11 @@ nav {
   color: #333;
 }
 
-#book-form, #room-form, #shelf-form, #user-form, #profile-form {
+#book-form,
+#room-form,
+#shelf-form,
+#user-form,
+#profile-form {
   padding: 1.5rem;
 }
 
@@ -403,7 +426,13 @@ nav {
   margin-bottom: 0.5rem;
 }
 
-/* Filter Bar */
+.field-hint {
+  color: #999;
+  font-size: 0.8rem;
+}
+
+/* ── 8. Filter bar ──────────────────────────────────────── */
+
 .filter-bar {
   display: flex;
   gap: 0.5rem;
@@ -426,164 +455,8 @@ nav {
   border-color: #3498db;
 }
 
-/* Shelf card clickable */
-.shelf-card[data-action="view-shelf"] {
-  cursor: pointer;
-  transition: background 0.2s;
-}
+/* ── 9. Pagination ──────────────────────────────────────── */
 
-.shelf-card[data-action="view-shelf"]:hover {
-  background: #eef3f7;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  header h1 { font-size: 1.4rem; }
-  .book-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
-  .shelves-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-  .users-table th, .users-table td { padding: 0.5rem 0.6rem; font-size: 0.85rem; }
-}
-
-@media (max-width: 600px) {
-  header { padding: 1rem; }
-  header h1 { font-size: 1.3rem; }
-  nav { flex-wrap: wrap; }
-  .view-header { flex-direction: column; align-items: stretch; }
-  .actions { flex-direction: column; }
-  #book-search { width: 100%; }
-  .filter-bar { flex-direction: column; }
-  .filter-bar select { width: 100%; }
-  .form-row { grid-template-columns: 1fr; }
-  .room-header { flex-direction: column; gap: 0.5rem; align-items: stretch; }
-  .header-row { flex-direction: column; }
-  .user-box { align-self: flex-end; }
-  .pagination-bar { flex-direction: column; align-items: center; }
-}
-
-/* Genre Autocomplete */
-.autocomplete-wrapper {
-  position: relative;
-}
-
-.suggestions-list {
-  display: none;
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: white;
-  border: 1px solid #ddd;
-  border-top: none;
-  border-radius: 0 0 5px 5px;
-  max-height: 180px;
-  overflow-y: auto;
-  z-index: 10;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.suggestions-list li {
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-
-.suggestions-list li:hover {
-  background: #3498db;
-  color: white;
-}
-
-/* Login Screen */
-#login-screen {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: #2c3e50;
-  z-index: 2000;
-  align-items: center;
-  justify-content: center;
-}
-
-#login-screen.active {
-  display: flex;
-}
-
-.login-card {
-  background: white;
-  padding: 2.5rem;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 380px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-}
-
-.login-card h1 {
-  text-align: center;
-  margin-bottom: 0.25rem;
-  font-size: 1.5rem;
-}
-
-.login-subtitle {
-  text-align: center;
-  color: #777;
-  margin-bottom: 1.5rem;
-}
-
-.login-error {
-  background: #fdecea;
-  border: 1px solid #e74c3c;
-  color: #c0392b;
-  padding: 0.5rem 0.75rem;
-  border-radius: 5px;
-  margin-bottom: 1rem;
-  font-size: 0.9rem;
-}
-
-.btn-block {
-  width: 100%;
-}
-
-/* Header user box */
-.header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.user-box {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  color: white;
-  font-weight: 500;
-}
-
-.role-badge {
-  display: inline-block;
-  padding: 0.15rem 0.6rem;
-  border-radius: 12px;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.badge-admin { background: #3498db; color: white; }
-.badge-editor { background: #f39c12; color: white; }
-.badge-viewer { background: #95a5a6; color: white; }
-
-.tag-pending {
-  background: #f39c12;
-  color: white;
-}
-
-.field-hint {
-  color: #999;
-  font-size: 0.8rem;
-}
-
-/* Pagination */
 .pagination-bar {
   display: flex;
   justify-content: space-between;
@@ -624,7 +497,8 @@ nav {
   margin-inline-start: 0.5rem;
 }
 
-/* Users table */
+/* ── 10. Users table ────────────────────────────────────── */
+
 .users-table {
   width: 100%;
   border-collapse: collapse;
@@ -670,4 +544,139 @@ nav {
   font-weight: normal !important;
   cursor: pointer;
   font-size: 0.95rem;
+}
+
+/* ── 11. Genre autocomplete ─────────────────────────────── */
+
+.autocomplete-wrapper {
+  position: relative;
+}
+
+.suggestions-list {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #ddd;
+  border-top: none;
+  border-radius: 0 0 5px 5px;
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 10;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.suggestions-list li {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.suggestions-list li:hover {
+  background: #3498db;
+  color: white;
+}
+
+/* ── 12. Login screen ───────────────────────────────────── */
+
+#login-screen {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #2c3e50;
+  z-index: 2000;
+  align-items: center;
+  justify-content: center;
+}
+
+#login-screen.active {
+  display: flex;
+}
+
+.login-card {
+  background: white;
+  padding: 2.5rem;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 380px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+}
+
+.login-card h1 {
+  text-align: center;
+  margin-bottom: 0.25rem;
+  font-size: 1.5rem;
+}
+
+.login-subtitle {
+  text-align: center;
+  color: #777;
+  margin-bottom: 1.5rem;
+}
+
+.login-error {
+  background: #fdecea;
+  border: 1px solid #e74c3c;
+  color: #c0392b;
+  padding: 0.5rem 0.75rem;
+  border-radius: 5px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+/* ── 13. Header user box & role badges ──────────────────── */
+
+.user-box {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: white;
+  font-weight: 500;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.badge-admin { background: #3498db; color: white; }
+.badge-editor { background: #f39c12; color: white; }
+.badge-viewer { background: #95a5a6; color: white; }
+
+.tag-pending {
+  background: #f39c12;
+  color: white;
+}
+
+/* ── 14. Responsive breakpoints ─────────────────────────── */
+
+@media (max-width: 768px) {
+  header h1 { font-size: 1.4rem; }
+  .book-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .shelves-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .users-table th, .users-table td { padding: 0.5rem 0.6rem; font-size: 0.85rem; }
+}
+
+@media (max-width: 600px) {
+  header { padding: 1rem; }
+  header h1 { font-size: 1.3rem; }
+  nav { flex-wrap: wrap; }
+  .view-header { flex-direction: column; align-items: stretch; }
+  .actions { flex-direction: column; }
+  #book-search { width: 100%; }
+  .filter-bar { flex-direction: column; }
+  .filter-bar select { width: 100%; }
+  .form-row { grid-template-columns: 1fr; }
+  .room-header { flex-direction: column; gap: 0.5rem; align-items: stretch; }
+  .header-row { flex-direction: column; }
+  .user-box { align-self: flex-end; }
+  .pagination-bar { flex-direction: column; align-items: center; }
 }

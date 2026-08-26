@@ -1,4 +1,29 @@
-// ========== TYPES ==========
+/*
+ * src/client/app.ts — Library Manager front-end
+ *
+ * Sections:
+ *   1. Types & global state
+ *   2. Helpers
+ *   3. Navigation & view switching
+ *   4. Authentication (login / logout / session)
+ *   5. Books view (list, search, filters, pagination)
+ *   6. Book modal (create / edit)
+ *   7. Rooms & shelves view
+ *   8. Users view (admin)
+ *   9. Profile modal (self-service password change)
+ *  10. Boot
+ */
+
+// ════════════════════════════════════════════════════════════
+// 1. Types & global state
+// ════════════════════════════════════════════════════════════
+
+interface Me {
+  id: number;
+  username: string;
+  role: 'admin' | 'editor' | 'viewer';
+  allowedRoomIds: number[];
+}
 
 interface Book {
   id: number;
@@ -6,1044 +31,978 @@ interface Book {
   author: string | null;
   isbn: string | null;
   genre: string | null;
-  shelf_id: number | null;
-  room_id: number | null;
   notes: string | null;
+  shelfId: number | null;
+  shelfName: string | null;
+  roomId: number | null;
+  roomName: string | null;
   status: 'approved' | 'pending';
-  created_by: number | null;
-  shelf_name: string | null;
-  room_name: string | null;
-}
-
-interface BooksPage {
-  data: Book[];
-  total: number;
-  page: number;
-  limit: number;
-}
-
-interface Shelf {
-  id: number;
-  room_id: number;
-  name: string;
-  room_name: string;
-  book_count: number;
+  createdBy: number | null;
+  updatedAt: string;
 }
 
 interface Room {
   id: number;
   name: string;
-  book_count: number;
+  bookCount: number;
 }
 
-type Role = 'admin' | 'editor' | 'viewer';
+interface Shelf {
+  id: number;
+  roomId: number;
+  name: string;
+  bookCount: number;
+}
 
-interface PublicUser {
+interface User {
   id: number;
   username: string;
-  role: Role;
-  allowed_room_ids: number[];
+  role: string;
+  allowedRoomIds: number[];
 }
 
-interface UserRow extends PublicUser {
-  created_at: string;
-}
+/** All in-memory state. */
+let me: Me | null = null;
+let allRooms: Room[] = [];
+let allShelves: Shelf[] = [];
+let allBooks: Book[] = [];
+let allUsers: User[] = [];
+let genres: string[] = [];
+let authors: string[] = [];
 
-// ========== API ==========
-
-const api = {
-  async get(url: string) {
-    const res = await fetch('/api' + url);
-    if (!res.ok) throw new Error((await res.json()).error);
-    return res.json();
-  },
-  async post(url: string, data: unknown) {
-    const res = await fetch('/api' + url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error((await res.json()).error);
-    return res.json();
-  },
-  async put(url: string, data: unknown) {
-    const res = await fetch('/api' + url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error((await res.json()).error);
-    return res.json();
-  },
-  async del(url: string) {
-    const res = await fetch('/api' + url, { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.json()).error);
-    return res.json();
-  },
-};
-
-// ========== STATE ==========
-
-let currentUser: PublicUser | null = null;
-let currentView = 'books';
-let activeFilters: { search: string; shelf_id: string; room_id: string; genre: string; author: string } = {
-  search: '', shelf_id: '', room_id: '', genre: '', author: '',
-};
-let pendingBookShelfId: number | null = null;
-
-let cacheRooms: Room[] = [];
-let cacheShelves: Shelf[] = [];
-let cacheGenres: string[] = [];
-let cacheAuthors: string[] = [];
-
-let booksPage = 1;
-let pageSize = 24;
+// ── Pagination state ────────────────────────────────────────
+let currentPage = 1;
+let pageSize = 12;
 let totalBooks = 0;
-let lastPageBooks: Book[] = [];
-let lastUsers: UserRow[] = [];
-let showPendingOnly = false;
+let showPendingBooks = false;
 
-// ========== PERMISSIONS ==========
+// ── Debounce timer for search ───────────────────────────────
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
-function isAdmin(): boolean {
-  return currentUser?.role === 'admin';
+// ════════════════════════════════════════════════════════════
+// 2. Helpers
+// ════════════════════════════════════════════════════════════
+
+/** Shorthand document.getElementById. */
+function $(id: string): HTMLElement {
+  return document.getElementById(id)!;
 }
 
-function roleLabel(role: Role): string {
-  if (role === 'admin') return 'מנהל';
-  if (role === 'editor') return 'עורך';
-  return 'צופה';
+/** Shorthand: get .value from an input/select element by id. */
+function $v(id: string): string {
+  return (document.getElementById(id) as HTMLInputElement).value;
 }
 
-function canEditRoom(roomId: number | null | undefined): boolean {
-  if (!currentUser) return false;
-  if (currentUser.role === 'admin') return true;
-  if (currentUser.role !== 'editor') return false;
-  return roomId != null && currentUser.allowed_room_ids.includes(Number(roomId));
+/** Check if the user can edit room-related content. */
+function canEditRoomLocation(roomId: number | null): boolean {
+  if (!me || !roomId) return false;
+  if (me.role === 'admin') return true;
+  if (me.role === 'editor') return me.allowedRoomIds.includes(roomId);
+  return false;
 }
 
+/** Check if the user can edit a specific book. */
 function canEditBook(book: Book): boolean {
-  if (!currentUser) return false;
-  if (currentUser.role === 'admin') return true;
-  if (book.status === 'pending') return book.created_by === currentUser.id;
-  if (currentUser.role !== 'editor') return false;
-  return book.room_id != null && currentUser.allowed_room_ids.includes(book.room_id);
+  if (!me) return false;
+  if (me.role === 'admin') return true;
+  if (me.role === 'editor') return canEditRoomLocation(book.roomId);
+  // Viewer: own pending only
+  if (book.status === 'pending' && book.createdBy === me.id) return true;
+  return false;
 }
 
-function canCreateBooks(): boolean {
-  return !!currentUser && currentUser.role !== 'viewer';
+// ════════════════════════════════════════════════════════════
+// 3. Navigation & view switching
+// ════════════════════════════════════════════════════════════
+
+/** Switch to the named view, update nav button active states. */
+function switchView(view: string) {
+  document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach((b) => b.classList.remove('active'));
+
+  const target = $(`view-${view}`);
+  if (target) target.classList.add('active');
+  const btn = document.querySelector(`.nav-btn[data-view="${view}"]`);
+  if (btn) btn.classList.add('active');
+
+  // Load data on demand
+  if (view === 'rooms') loadRooms();
+  if (view === 'users') loadUsers();
+  if (view === 'books') loadBooks();
+  if (view === 'dashboard') loadDashboard();
 }
 
-// ========== AUTH FLOW ==========
+// ════════════════════════════════════════════════════════════
+// 4. Authentication
+// ════════════════════════════════════════════════════════════
 
-async function boot(): Promise<void> {
+/** Show the login screen, hide the app. */
+function showLogin() {
+  $('login-screen').classList.add('active');
+  $('app').style.display = 'none';
+}
+
+/** Hide the login screen, show the app header/user info. */
+function enterApp() {
+  $('login-screen').classList.remove('active');
+  $('app').style.display = '';
+  $('user-box').style.display = '';
+  $('user-name').textContent = me!.username;
+  $('user-role-badge').textContent =
+    me!.role === 'admin' ? 'מנהל' : me!.role === 'editor' ? 'עורך' : 'צופה';
+  $('user-role-badge').className = `role-badge badge-${me!.role}`;
+
+  // Show/hide role-restricted nav buttons
+  $('nav-dashboard').style.display = me!.role === 'admin' ? '' : 'none';
+  $('nav-users').style.display = me!.role === 'admin' ? '' : 'none';
+
+  switchView('books');
+}
+
+/** Try to restore a session from the httpOnly cookie on page load. */
+async function tryRestoreSession() {
   try {
-    currentUser = await api.get('/auth/me') as PublicUser;
-    enterApp();
+    const res = await fetch('/api/auth/me');
+    if (res.ok) {
+      me = await res.json();
+      enterApp();
+    } else {
+      showLogin();
+    }
   } catch {
     showLogin();
   }
 }
 
-function showLogin(): void {
-  document.getElementById('login-screen')!.classList.add('active');
-}
+/** Handle login form submit. */
+function initLoginForm() {
+  $('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = ($('login-username') as HTMLInputElement).value.trim();
+    const password = ($('login-password') as HTMLInputElement).value;
+    const errorEl = $('login-error');
 
-async function handleLogin(e: Event): Promise<void> {
-  e.preventDefault();
-  const errorEl = document.getElementById('login-error')!;
-  errorEl.style.display = 'none';
-  const username = (document.getElementById('login-username') as HTMLInputElement).value.trim();
-  const password = (document.getElementById('login-password') as HTMLInputElement).value;
-  try {
-    currentUser = await api.post('/auth/login', { username, password }) as PublicUser;
-    enterApp();
-  } catch (err: any) {
-    errorEl.textContent = err.message;
-    errorEl.style.display = 'block';
-  }
-}
-
-function enterApp(): void {
-  document.getElementById('login-screen')!.classList.remove('active');
-  applyRoleUI();
-  fetchAllData().then(() => loadView(currentView)).catch(err => alert(err.message));
-}
-
-async function logout(): Promise<void> {
-  try { await api.post('/auth/logout', {}); } catch { /* ignore */ }
-  location.reload();
-}
-
-function applyRoleUI(): void {
-  if (!currentUser) return;
-  document.getElementById('user-box')!.style.display = 'flex';
-  document.getElementById('user-name')!.textContent = currentUser.username;
-  const badge = document.getElementById('user-role-badge')!;
-  badge.textContent = roleLabel(currentUser.role);
-  badge.className = 'role-badge badge-' + currentUser.role;
-  document.getElementById('nav-users')!.style.display = isAdmin() ? '' : 'none';
-  document.getElementById('nav-dashboard')!.style.display = isAdmin() ? '' : 'none';
-  document.getElementById('btn-add-room')!.style.display = isAdmin() ? '' : 'none';
-}
-
-// ========== CACHE ==========
-
-async function fetchAllData(): Promise<void> {
-  const [rooms, shelves, genres, authors] = await Promise.all([
-    api.get('/rooms') as Promise<Room[]>,
-    api.get('/shelves') as Promise<Shelf[]>,
-    api.get('/genres') as Promise<string[]>,
-    api.get('/authors') as Promise<string[]>,
-  ]);
-  cacheRooms = rooms;
-  cacheShelves = shelves;
-  cacheGenres = genres;
-  cacheAuthors = authors;
-}
-
-// ========== GENRE AUTOCOMPLETE ==========
-
-function setupGenreAutocomplete(): void {
-  const input = document.getElementById('book-genre') as HTMLInputElement;
-  const list = document.getElementById('genre-suggestions') as HTMLUListElement;
-  if (!input || !list) return;
-
-  input.oninput = () => {
-    const val = input.value.trim().toLowerCase();
-    list.innerHTML = '';
-    if (!val) { list.style.display = 'none'; return; }
-    const matches = cacheGenres.filter(g => g.toLowerCase().includes(val) && g.toLowerCase() !== val);
-    if (!matches.length) { list.style.display = 'none'; return; }
-    list.style.display = 'block';
-    matches.forEach(genre => {
-      const li = document.createElement('li');
-      li.textContent = genre;
-      li.onmousedown = () => { input.value = genre; list.style.display = 'none'; };
-      list.appendChild(li);
-    });
-  };
-
-  input.onblur = () => { setTimeout(() => { list.style.display = 'none'; }, 200); };
-}
-
-// ========== NAVIGATION ==========
-
-function switchTo(view: string): void {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector(`.nav-btn[data-view="${view}"]`)!.classList.add('active');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-' + view)!.classList.add('active');
-  currentView = view;
-  loadView(view);
-}
-
-function initNav(): void {
-  document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchTo((btn as HTMLElement).dataset.view!));
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        errorEl.textContent = data.error || 'Login failed';
+        errorEl.style.display = 'block';
+        return;
+      }
+      me = await res.json();
+      enterApp();
+    } catch {
+      errorEl.textContent = 'Network error';
+      errorEl.style.display = 'block';
+    }
   });
 }
 
-function loadView(view: string): void {
-  switch (view) {
-    case 'dashboard': loadDashboard(); break;
-    case 'books':
-      pendingBookShelfId = null;
-      booksPage = 1;
-      resetBooksHeader();
-      loadFilterDropdowns();
-      setupFilterListeners();
-      activeFilters = { search: '', shelf_id: '', room_id: '', genre: '', author: '' };
-      loadBooks();
-      break;
-    case 'rooms': loadRooms(); break;
-    case 'users': loadUsers(); break;
-  }
-}
-
-// ========== DASHBOARD ==========
-
-async function loadDashboard(): Promise<void> {
-  const [stats, unassigned] = await Promise.all([
-    api.get('/stats') as Promise<{ total_books: number; total_rooms: number; total_shelves: number; unassigned_books: number; pending_books: number }>,
-    api.get('/books?shelf_id=none&limit=8') as Promise<BooksPage>,
-  ]);
-  const pendingCard = isAdmin()
-    ? `<div class="stat-card"><h3>${stats.pending_books}</h3><p>ממתינים לאישור</p></div>`
-    : '';
-  document.getElementById('stats')!.innerHTML = `
-    <div class="stat-card"><h3>${stats.total_books}</h3><p>ספרים</p></div>
-    <div class="stat-card"><h3>${stats.total_rooms}</h3><p>חדרים</p></div>
-    <div class="stat-card"><h3>${stats.total_shelves}</h3><p>מדפים</p></div>
-    <div class="stat-card"><h3>${stats.unassigned_books}</h3><p>לא מוקצים</p></div>
-    ${pendingCard}
-  `;
-  const container = document.getElementById('unassigned-books')!;
-  if (!unassigned.data.length) {
-    container.innerHTML = '<div class="empty-state"><p>כל הספרים מוקצים למדפים!</p></div>';
-  } else {
-    container.innerHTML = unassigned.data.map(bookCard).join('');
-  }
-}
-
-// ========== BOOKS ==========
-
-let searchTimeout: ReturnType<typeof setTimeout>;
-
-function initBookSearch(): void {
-  document.getElementById('book-search')!.addEventListener('input', (e) => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-      activeFilters.search = (e.target as HTMLInputElement).value;
-      booksPage = 1;
-      loadBooks();
-    }, 300);
+/** Handle logout button. */
+function initLogout() {
+  $('btn-logout').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    me = null;
+    allBooks = [];
+    allRooms = [];
+    allShelves = [];
+    allUsers = [];
+    showLogin();
   });
 }
 
-function renderBooks(books: Book[]): void {
-  const container = document.getElementById('books-list')!;
-  if (!books.length) {
-    container.innerHTML = '<div class="empty-state"><h3>לא נמצאו ספרים</h3><p>אין ספרים התואמים את הסינון</p></div>';
-  } else {
-    container.innerHTML = books.map(bookCard).join('');
-  }
-}
+// ════════════════════════════════════════════════════════════
+// 5. Books view
+// ════════════════════════════════════════════════════════════
 
-async function loadBooks(): Promise<void> {
+/** Fetch the current page of books from the API and render. */
+async function loadBooks() {
   const params = new URLSearchParams();
-  if (activeFilters.search) params.set('search', activeFilters.search);
-  if (activeFilters.shelf_id) params.set('shelf_id', activeFilters.shelf_id);
-  if (activeFilters.room_id) params.set('room_id', activeFilters.room_id);
-  if (activeFilters.genre) params.set('genre', activeFilters.genre);
-  if (activeFilters.author) params.set('author', activeFilters.author);
-  params.set('page', String(booksPage));
+  params.set('page', String(currentPage));
   params.set('limit', String(pageSize));
-  if (showPendingOnly && isAdmin()) params.set('pending', '1');
+
+  const q = ($('book-search') as HTMLInputElement).value.trim();
+  if (q) params.set('q', q);
+
+  const genre = ($('filter-genre') as HTMLSelectElement).value;
+  const room = ($('filter-room') as HTMLSelectElement).value;
+  const shelf = ($('filter-shelf') as HTMLSelectElement).value;
+  const author = ($('filter-author') as HTMLSelectElement).value;
+
+  if (genre) params.set('genre', genre);
+  if (room) params.set('room', room);
+  if (shelf) params.set('shelf', shelf);
+  if (author) params.set('author', author);
+  if (showPendingBooks) params.set('status', 'pending');
+
   try {
-    const res = await api.get('/books?' + params.toString()) as BooksPage;
-    totalBooks = res.total;
-    lastPageBooks = res.data;
-    renderBooks(res.data);
-    renderPagination();
-  } catch (err: any) {
-    alert(err.message);
+    const res = await fetch(`/api/books?${params}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    allBooks = data.items;
+    totalBooks = data.total;
+    renderBooks();
+    renderPaginationBar();
+  } catch (err) {
+    console.error('loadBooks', err);
   }
 }
 
-function renderPagination(): void {
-  const container = document.getElementById('pagination-bar')!;
+/** Render the book cards in the books view. */
+function renderBooks() {
+  const container = $('books-list');
+  if (allBooks.length === 0) {
+    container.innerHTML =
+      '<div class="empty-state"><h3>📚</h3><p>לא נמצאו ספרים</p></div>';
+    return;
+  }
+  container.innerHTML = allBooks
+    .map((b) => {
+      const pendingTag =
+        b.status === 'pending'
+          ? '<span class="tag tag-pending">ממתין לאישור</span>'
+          : '';
+      const location = b.roomName
+        ? `<div class="location">📍 ${b.roomName} › ${b.shelfName}</div>`
+        : '';
+      const genreTag = b.genre ? `<span class="tag">${b.genre}</span>` : '';
+      const isbnTag = b.isbn ? `<span class="tag">ISBN: ${b.isbn}</span>` : '';
+
+      let actions = '';
+      if (canEditBook(b)) {
+        actions = `
+          <div class="actions">
+            <button class="btn btn-primary btn-small" onclick="openBookModal(${b.id})">עריכה</button>
+            <button class="btn btn-danger btn-small" onclick="deleteBook(${b.id})">מחיקה</button>
+          </div>`;
+      }
+
+      return `
+        <div class="book-card">
+          <h4>${escHtml(b.title)} ${pendingTag}</h4>
+          ${b.author ? `<div class="author">${escHtml(b.author)}</div>` : ''}
+          <div class="meta">${genreTag} ${isbnTag}</div>
+          ${location}
+          ${b.notes ? `<div class="notes">${escHtml(b.notes)}</div>` : ''}
+          ${actions}
+        </div>`;
+    })
+    .join('');
+}
+
+/** Render the pagination controls below the book grid. */
+function renderPaginationBar() {
   const totalPages = Math.max(1, Math.ceil(totalBooks / pageSize));
-  if (booksPage > totalPages) {
-    booksPage = totalPages;
-    void loadBooks();
-    return;
-  }
-  if (!totalBooks) {
-    container.innerHTML = '';
-    return;
-  }
+  const from = (currentPage - 1) * pageSize + 1;
+  const to = Math.min(currentPage * pageSize, totalBooks);
 
-  let numbers = '';
-  const windowSize = 5;
-  let start = Math.max(1, booksPage - Math.floor(windowSize / 2));
-  const end = Math.min(totalPages, start + windowSize - 1);
-  start = Math.max(1, end - windowSize + 1);
-  for (let p = start; p <= end; p++) {
-    numbers += `<button class="btn btn-small page-btn ${p === booksPage ? 'btn-primary' : 'btn-secondary'}" data-action="goto-page" data-page="${p}">${p}</button>`;
-  }
-
-  container.innerHTML = `
-    <div class="pagination-info">${totalBooks} ספרים · עמוד ${booksPage} מתוך ${totalPages}</div>
+  $('pagination-bar').innerHTML = `
+    <div class="pagination-info">
+      מציג ${from}–${to} מתוך ${totalBooks}
+    </div>
     <div class="pagination-controls">
-      <button class="btn btn-secondary btn-small" data-action="goto-page" data-page="${booksPage - 1}" ${booksPage <= 1 ? 'disabled' : ''}>הקודם</button>
-      ${numbers}
-      <button class="btn btn-secondary btn-small" data-action="goto-page" data-page="${booksPage + 1}" ${booksPage >= totalPages ? 'disabled' : ''}>הבא</button>
-      <select id="page-size" title="כמות לדף">
-        ${[12, 24, 48, 96].map(n => `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n} לדף</option>`).join('')}
+      <button class="btn btn-secondary btn-small page-btn" onclick="goPage(1)" ${currentPage === 1 ? 'disabled' : ''}>«</button>
+      <button class="btn btn-secondary btn-small page-btn" onclick="goPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>‹</button>
+      <span style="padding:0 0.5rem">עמוד ${currentPage} / ${totalPages}</span>
+      <button class="btn btn-secondary btn-small page-btn" onclick="goPage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>›</button>
+      <button class="btn btn-secondary btn-small page-btn" onclick="goPage(${totalPages})" ${currentPage >= totalPages ? 'disabled' : ''}>»</button>
+      <select id="page-size" onchange="changePageSize(this.value)">
+        <option value="6" ${pageSize === 6 ? 'selected' : ''}>6</option>
+        <option value="12" ${pageSize === 12 ? 'selected' : ''}>12</option>
+        <option value="24" ${pageSize === 24 ? 'selected' : ''}>24</option>
+        <option value="48" ${pageSize === 48 ? 'selected' : ''}>48</option>
       </select>
-    </div>
-  `;
-  document.getElementById('page-size')!.addEventListener('change', (e) => {
-    pageSize = Number((e.target as HTMLSelectElement).value);
-    booksPage = 1;
-    loadBooks();
-  });
+    </div>`;
 }
 
-function loadFilterDropdowns(): void {
-  const roomSelect = document.getElementById('filter-room') as HTMLSelectElement;
-  const shelfSelect = document.getElementById('filter-shelf') as HTMLSelectElement;
-  const genreSelect = document.getElementById('filter-genre') as HTMLSelectElement;
-  const authorSelect = document.getElementById('filter-author') as HTMLSelectElement;
-
-  const currentRoom = roomSelect.value;
-  const currentShelf = shelfSelect.value;
-  const currentGenre = genreSelect.value;
-  const currentAuthor = authorSelect.value;
-
-  roomSelect.innerHTML = '<option value="">כל החדרים</option>';
-  cacheRooms.forEach(r => {
-    const opt = document.createElement('option');
-    opt.value = String(r.id);
-    opt.textContent = r.name;
-    roomSelect.appendChild(opt);
-  });
-
-  shelfSelect.innerHTML = '<option value="">כל המדפים</option>';
-  let lastRoom = '';
-  cacheShelves.forEach(s => {
-    if (s.room_name !== lastRoom) {
-      const grp = document.createElement('optgroup');
-      grp.label = s.room_name;
-      shelfSelect.appendChild(grp);
-      lastRoom = s.room_name;
-    }
-    const opt = document.createElement('option');
-    opt.value = String(s.id);
-    opt.textContent = s.name;
-    (shelfSelect.lastChild as HTMLOptGroupElement).appendChild(opt);
-  });
-
-  genreSelect.innerHTML = '<option value="">כל הז\u2019אנרים</option>';
-  cacheGenres.forEach(g => {
-    const opt = document.createElement('option');
-    opt.value = g;
-    opt.textContent = g;
-    genreSelect.appendChild(opt);
-  });
-
-  authorSelect.innerHTML = '<option value="">כל המחברים</option>';
-  cacheAuthors.forEach(a => {
-    const opt = document.createElement('option');
-    opt.value = a;
-    opt.textContent = a;
-    authorSelect.appendChild(opt);
-  });
-
-  roomSelect.value = currentRoom;
-  shelfSelect.value = currentShelf;
-  genreSelect.value = currentGenre;
-  authorSelect.value = currentAuthor;
-}
-
-function setupFilterListeners(): void {
-  ['filter-room', 'filter-shelf', 'filter-genre', 'filter-author'].forEach(id => {
-    document.getElementById(id)!.addEventListener('change', (e) => {
-      const key = id.replace('filter-', '') as keyof typeof activeFilters;
-      activeFilters[key] = (e.target as HTMLSelectElement).value;
-      booksPage = 1;
-      loadBooks();
-    });
-  });
-}
-
-function clearFilters(): void {
-  activeFilters = { search: '', shelf_id: '', room_id: '', genre: '', author: '' };
-  showPendingOnly = false;
-  booksPage = 1;
-  (document.getElementById('book-search') as HTMLInputElement).value = '';
-  (document.getElementById('filter-room') as HTMLSelectElement).value = '';
-  (document.getElementById('filter-shelf') as HTMLSelectElement).value = '';
-  (document.getElementById('filter-genre') as HTMLSelectElement).value = '';
-  (document.getElementById('filter-author') as HTMLSelectElement).value = '';
+/** Navigate to a specific page. */
+(window as any).goPage = function (page: number) {
+  const totalPages = Math.max(1, Math.ceil(totalBooks / pageSize));
+  currentPage = Math.max(1, Math.min(page, totalPages));
   loadBooks();
-}
+};
 
-function viewShelfBooks(shelfId: number, shelfName: string): void {
-  switchToBooksDirect();
-  const headerEl = document.getElementById('books-view-header')!;
-  headerEl.innerHTML = `
-    <button class="btn btn-secondary btn-small" data-action="back-to-rooms">← חזרה לחדרים</button>
-    <h2>ספרים במדף: ${esc(shelfName)}</h2>
-    <div class="actions">
-      ${canCreateBooks() ? '<button class="btn btn-primary" id="btn-add-book">+ הוסף ספר</button>' : ''}
-    </div>
-  `;
-  const addBtn = document.getElementById('btn-add-book');
-  if (addBtn) {
-    addBtn.addEventListener('click', () => {
-      pendingBookShelfId = shelfId;
-      openBookModal();
-    });
+/** Change page size and reset to page 1. */
+(window as any).changePageSize = function (val: string) {
+  pageSize = parseInt(val, 10) || 12;
+  currentPage = 1;
+  loadBooks();
+};
+
+/** Delete a book after confirmation. */
+(window as any).deleteBook = async function (id: number) {
+  if (!confirm('בטוח למחוק?')) return;
+  await fetch(`/api/books/${id}`, { method: 'DELETE' });
+  loadBooks();
+};
+
+// ════════════════════════════════════════════════════════════
+// 6. Book modal (create / edit)
+// ════════════════════════════════════════════════════════════
+
+/** Open the book modal for creating or editing.
+ *  If `bookId` is provided, load the book data into the form. */
+(window as any).openBookModal = async function (bookId?: number) {
+  const modal = $('book-modal');
+  const form = $('book-form') as HTMLFormElement;
+  form.reset();
+  ($('book-id') as HTMLInputElement).value = '';
+
+  // Populate shelf dropdown from loaded rooms/shelves
+  const shelfSelect = $('book-shelf') as HTMLSelectElement;
+  shelfSelect.innerHTML = '<option value="">לא מוקצה</option>';
+  for (const room of allRooms) {
+    const roomShelves = allShelves.filter((s) => s.roomId === room.id);
+    if (roomShelves.length === 0) continue;
+    const group = document.createElement('optgroup');
+    group.label = room.name;
+    for (const s of roomShelves) {
+      const opt = document.createElement('option');
+      opt.value = String(s.id);
+      opt.textContent = s.name;
+      group.appendChild(opt);
+    }
+    shelfSelect.appendChild(group);
   }
 
-  activeFilters = { search: '', shelf_id: String(shelfId), room_id: '', genre: '', author: '' };
-  booksPage = 1;
-  (document.getElementById('book-search') as HTMLInputElement).value = '';
-  loadFilterDropdowns();
-  setupFilterListeners();
-  loadBooks();
-}
-
-function switchToBooksDirect(): void {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.querySelector('.nav-btn[data-view="books"]')!.classList.add('active');
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.getElementById('view-books')!.classList.add('active');
-  currentView = 'books';
-}
-
-function resetBooksHeader(): void {
-  const headerEl = document.getElementById('books-view-header')!;
-  const pendingBtn = isAdmin()
-    ? `<button class="btn btn-small ${showPendingOnly ? 'btn-primary' : 'btn-secondary'}" data-action="toggle-pending">ממתינים לאישור</button>`
-    : '';
-  headerEl.innerHTML = `
-    <h2>הספרים שלי</h2>
-    <div class="actions">
-      <input type="text" id="book-search" placeholder="חיפוש ספרים...">
-      ${pendingBtn}
-      ${canCreateBooks() ? '<button class="btn btn-primary" id="btn-add-book">+ הוסף ספר</button>' : ''}
-    </div>
-  `;
-  document.getElementById('book-search')!.addEventListener('input', (e) => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-      activeFilters.search = (e.target as HTMLInputElement).value;
-      booksPage = 1;
-      loadBooks();
-    }, 300);
-  });
-  const addBtn = document.getElementById('btn-add-book');
-  if (addBtn) addBtn.addEventListener('click', () => openBookModal());
-}
-
-// ========== BOOK MODAL ==========
-
-function bookCard(book: Book): string {
-  const location = book.room_name
-    ? `<div class="location">${esc(book.room_name)} › ${esc(book.shelf_name!)}</div>`
-    : '<div class="location" style="color:#999">לא מוקצה</div>';
-  const pendingTag = book.status === 'pending' ? '<span class="tag tag-pending">ממתין לאישור</span>' : '';
-  const actions = canEditBook(book)
-    ? `<div class="actions">
-        <button class="btn btn-primary btn-small" data-action="edit-book" data-id="${book.id}">ערוך</button>
-        <button class="btn btn-danger btn-small" data-action="delete-book" data-id="${book.id}">מחק</button>
-      </div>`
-    : '';
-  return `
-    <div class="book-card">
-      <h4>${esc(book.title)}</h4>
-      ${book.author ? `<div class="author">${esc(book.author)}</div>` : ''}
-      <div class="meta">
-        ${pendingTag}
-        ${book.isbn ? `<span class="tag">ISBN: ${esc(book.isbn)}</span>` : ''}
-        ${book.genre ? `<span class="tag">${esc(book.genre)}</span>` : ''}
-      </div>
-      ${location}
-      ${book.notes ? `<p style="font-size:0.85rem;color:#666;margin-top:0.3rem">${esc(book.notes)}</p>` : ''}
-      ${actions}
-    </div>
-  `;
-}
-
-function openBookModal(book: Book | null = null): void {
-  loadShelfSelect(book?.shelf_id ?? null);
-  setupGenreAutocomplete();
-  if (book) {
-    document.getElementById('book-modal-title')!.textContent = 'ערוך ספר';
-    (document.getElementById('book-id') as HTMLInputElement).value = String(book.id);
-    (document.getElementById('book-title') as HTMLInputElement).value = book.title;
-    (document.getElementById('book-author') as HTMLInputElement).value = book.author || '';
-    (document.getElementById('book-isbn') as HTMLInputElement).value = book.isbn || '';
-    (document.getElementById('book-genre') as HTMLInputElement).value = book.genre || '';
-    (document.getElementById('book-shelf') as HTMLSelectElement).value = book.shelf_id ? String(book.shelf_id) : '';
-    (document.getElementById('book-notes') as HTMLTextAreaElement).value = book.notes || '';
+  if (bookId) {
+    // Editing existing book
+    $('book-modal-title').textContent = 'ערוך ספר';
+    const res = await fetch(`/api/books/${bookId}`);
+    if (!res.ok) return;
+    const book: Book = await res.json();
+    ($('book-id') as HTMLInputElement).value = String(book.id);
+    ($('book-title') as HTMLInputElement).value = book.title;
+    ($('book-author') as HTMLInputElement).value = book.author ?? '';
+    ($('book-isbn') as HTMLInputElement).value = book.isbn ?? '';
+    ($('book-genre') as HTMLInputElement).value = book.genre ?? '';
+    ($('book-notes') as HTMLTextAreaElement).value = book.notes ?? '';
+    if (book.shelfId) shelfSelect.value = String(book.shelfId);
   } else {
-    document.getElementById('book-modal-title')!.textContent = 'הוסף ספר';
-    (document.getElementById('book-form') as HTMLFormElement).reset();
-    (document.getElementById('book-id') as HTMLInputElement).value = '';
-    if (pendingBookShelfId) {
-      (document.getElementById('book-shelf') as HTMLSelectElement).value = String(pendingBookShelfId);
-    }
+    $('book-modal-title').textContent = 'הוסף ספר';
   }
-  document.getElementById('book-modal')!.classList.add('active');
-}
 
-function closeBookModal(): void {
-  document.getElementById('book-modal')!.classList.remove('active');
-}
+  modal.classList.add('active');
+};
 
-async function saveBook(e: Event): Promise<void> {
-  e.preventDefault();
-  const id = (document.getElementById('book-id') as HTMLInputElement).value;
+/** Save book (create or update) from the modal form. */
+async function saveBook() {
+  const form = $('book-form') as HTMLFormElement;
+  const id = $v('book-id');
   const data = {
-    title: (document.getElementById('book-title') as HTMLInputElement).value,
-    author: (document.getElementById('book-author') as HTMLInputElement).value || null,
-    isbn: (document.getElementById('book-isbn') as HTMLInputElement).value || null,
-    genre: (document.getElementById('book-genre') as HTMLInputElement).value || null,
-    shelf_id: (document.getElementById('book-shelf') as HTMLSelectElement).value
-      ? Number((document.getElementById('book-shelf') as HTMLSelectElement).value)
-      : null,
-    notes: (document.getElementById('book-notes') as HTMLTextAreaElement).value || null,
+    title: ($('book-title') as HTMLInputElement).value.trim(),
+    author: ($('book-author') as HTMLInputElement).value.trim() || null,
+    isbn: ($('book-isbn') as HTMLInputElement).value.trim() || null,
+    genre: ($('book-genre') as HTMLInputElement).value.trim() || null,
+    notes: ($('book-notes') as HTMLTextAreaElement).value.trim() || null,
+    shelf_id: ($('book-shelf') as HTMLSelectElement).value || null,
   };
-  try {
-    if (id) await api.put('/books/' + id, data);
-    else await api.post('/books', data);
-    closeBookModal();
-    pendingBookShelfId = null;
-    await refreshAfterChange();
-  } catch (err: any) {
-    alert(err.message);
-  }
-}
 
-async function deleteBook(id: number): Promise<void> {
-  if (!confirm('למחוק ספר זה?')) return;
-  try {
-    await api.del('/books/' + id);
-    await refreshAfterChange();
-  } catch (err: any) {
-    alert(err.message);
-  }
-}
-
-async function refreshAfterChange(): Promise<void> {
-  if (currentView === 'books') {
-    await fetchAllData().catch(() => undefined);
-    loadBooks();
-  } else {
-    await fetchAllData();
-    loadView(currentView);
-  }
-}
-
-function editBook(id: number): void {
-  const book = lastPageBooks.find(b => b.id === id);
-  if (book) openBookModal(book);
-}
-
-// ========== SHELF SELECT ==========
-
-function loadShelfSelect(selectedShelfId: number | null): void {
-  const select = document.getElementById('book-shelf') as HTMLSelectElement;
-  select.innerHTML = '<option value="">לא מוקצה</option>';
-  let currentRoom = '';
-  let optgroup: HTMLOptGroupElement | null = null;
-
-  cacheShelves.forEach(shelf => {
-    if (shelf.room_name !== currentRoom) {
-      optgroup = document.createElement('optgroup');
-      optgroup.label = shelf.room_name;
-      select.appendChild(optgroup);
-      currentRoom = shelf.room_name;
-    }
-    const opt = document.createElement('option');
-    opt.value = String(shelf.id);
-    if (!canEditRoom(shelf.room_id)) {
-      opt.disabled = true;
-      opt.textContent = shelf.name + ' — אין הרשאת עריכה';
-    } else {
-      opt.textContent = shelf.name;
-    }
-    optgroup!.appendChild(opt);
-  });
-
-  if (selectedShelfId) select.value = String(selectedShelfId);
-  if (pendingBookShelfId && !selectedShelfId) select.value = String(pendingBookShelfId);
-}
-
-// ========== ROOMS ==========
-
-function loadRooms(): void {
-  const container = document.getElementById('rooms-list')!;
-
-  if (!cacheRooms.length) {
-    container.innerHTML = '<div class="empty-state"><h3>אין חדרים עדיין</h3><p>הוסף חדר כדי להתחיל לארגן את הספרים</p></div>';
+  if (!data.title) {
+    alert('כותרת חובה');
     return;
   }
 
-  container.innerHTML = cacheRooms.map(room => {
-    const editable = canEditRoom(room.id);
-    const roomActions = isAdmin()
-      ? `<button class="btn btn-primary btn-small" data-action="edit-room" data-id="${room.id}">ערוך</button>
-         <button class="btn btn-danger btn-small" data-action="delete-room" data-id="${room.id}">מחק</button>`
-      : '';
-    const roomShelves = cacheShelves.filter(s => s.room_id === room.id);
-    return `
+  if (id) {
+    await fetch(`/api/books/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  } else {
+    await fetch('/api/books', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  $('book-modal').classList.remove('active');
+  loadBooks();
+}
+
+// ════════════════════════════════════════════════════════════
+// 7. Rooms & shelves view
+// ════════════════════════════════════════════════════════════
+
+/** Fetch rooms + shelves and render the rooms view. */
+async function loadRooms() {
+  const [roomsRes, shelvesRes] = await Promise.all([
+    fetch('/api/rooms'),
+    fetch('/api/books?all=true'),
+  ]);
+
+  if (!roomsRes.ok) return;
+  allRooms = await roomsRes.json();
+
+  // Shelves come from rooms; fetch them
+  const shelvesPromises = allRooms.map((r) =>
+    fetch(`/api/rooms/${r.id}/shelves`).then((res) =>
+      res.ok ? res.json() : ([] as Shelf[]),
+    ),
+  );
+  const shelvesArrays = await Promise.all(shelvesPromises);
+  allShelves = shelvesArrays.flat();
+  renderRooms();
+}
+
+/** Render the rooms → shelves → book-count hierarchy. */
+function renderRooms() {
+  const container = $('rooms-list');
+  if (allRooms.length === 0) {
+    container.innerHTML =
+      '<div class="empty-state"><h3>🏠</h3><p>אין חדרים עדיין</p></div>';
+    return;
+  }
+  container.innerHTML = allRooms
+    .map((room) => {
+      const shelves = allShelves.filter((s) => s.roomId === room.id);
+      const shelfCards = shelves
+        .map(
+          (s) => `
+        <div class="shelf-card" data-action="view-shelf" onclick="viewShelfBooks(${s.id})">
+          <h4>${escHtml(s.name)}</h4>
+          <div class="book-count">${s.bookCount} ספרים</div>
+          <div class="actions">
+            <button class="btn btn-danger btn-small" onclick="event.stopPropagation(); deleteShelf(${s.id})">מחיקה</button>
+          </div>
+        </div>`,
+        )
+        .join('');
+
+      return `
       <div class="room-card">
         <div class="room-header">
-          <h3>${esc(room.name)}</h3>
+          <h3>${escHtml(room.name)}</h3>
+          <span class="book-count">${room.bookCount} ספרים</span>
           <div class="room-actions">
-            <span class="book-count">${room.book_count} ספרים</span>
-            ${roomActions}
+            <button class="btn btn-primary btn-small" onclick="openShelfModal(${room.id})">+ מדף</button>
+            <button class="btn btn-danger btn-small" onclick="deleteRoom(${room.id})">מחק חדר</button>
           </div>
         </div>
         <div class="room-body">
           <div class="shelves-grid">
-            ${roomShelves.map(shelf => {
-              const shelfActions = editable
-                ? `<div class="actions">
-                    <button class="btn btn-primary btn-small" data-action="edit-shelf" data-id="${shelf.id}">ערוך</button>
-                    <button class="btn btn-danger btn-small" data-action="delete-shelf" data-id="${shelf.id}">מחק</button>
-                  </div>`
-                : '';
-              return `
-                <div class="shelf-card" data-action="view-shelf" data-id="${shelf.id}" data-name="${esc(shelf.name)}">
-                  <h4>${esc(shelf.name)}</h4>
-                  <div class="book-count">${shelf.book_count} ספרים</div>
-                  ${shelfActions}
-                </div>
-              `;
-            }).join('')}
-            ${editable ? `<div class="add-shelf-btn" data-action="add-shelf" data-room-id="${room.id}">+ הוסף מדף</div>` : ''}
+            ${shelfCards}
+            <div class="add-shelf-btn" onclick="openShelfModal(${room.id})">+ הוסף מדף</div>
           </div>
         </div>
-      </div>
-    `;
-  }).join('');
+      </div>`;
+    })
+    .join('');
 }
 
-function openRoomModal(room: Room | null = null): void {
-  if (room) {
-    document.getElementById('room-modal-title')!.textContent = 'ערוך חדר';
-    (document.getElementById('room-id') as HTMLInputElement).value = String(room.id);
-    (document.getElementById('room-name') as HTMLInputElement).value = room.name;
-  } else {
-    document.getElementById('room-modal-title')!.textContent = 'הוסף חדר';
-    (document.getElementById('room-form') as HTMLFormElement).reset();
-    (document.getElementById('room-id') as HTMLInputElement).value = '';
-  }
-  document.getElementById('room-modal')!.classList.add('active');
-}
+/** Navigate to books filtered by shelf. */
+(window as any).viewShelfBooks = function (shelfId: number) {
+  ($('filter-shelf') as HTMLSelectElement).value = String(shelfId);
+  switchView('books');
+  loadBooks();
+};
 
-function closeRoomModal(): void {
-  document.getElementById('room-modal')!.classList.remove('active');
-}
+/** Open the room create modal. */
+function initRoomModal() {
+  $('btn-add-room').addEventListener('click', () => {
+    ($('room-form') as HTMLFormElement).reset();
+    ($('room-id') as HTMLInputElement).value = '';
+    $('room-modal-title').textContent = 'הוסף חדר';
+    $('room-modal').classList.add('active');
+  });
 
-async function saveRoom(e: Event): Promise<void> {
-  e.preventDefault();
-  const id = (document.getElementById('room-id') as HTMLInputElement).value;
-  const data = {
-    name: (document.getElementById('room-name') as HTMLInputElement).value,
-  };
-  try {
-    if (id) await api.put('/rooms/' + id, data);
-    else await api.post('/rooms', data);
-    closeRoomModal();
-    await fetchAllData();
+  $('room-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = $v('room-id');
+    const name = ($('room-name') as HTMLInputElement).value.trim();
+    if (!name) return;
+
+    if (id) {
+      await fetch(`/api/rooms/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    } else {
+      await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    }
+    $('room-modal').classList.remove('active');
     loadRooms();
-  } catch (err: any) {
-    alert(err.message);
-  }
+  });
+
+  $('btn-close-room-modal').addEventListener('click', () =>
+    $('room-modal').classList.remove('active'),
+  );
+  $('btn-cancel-room').addEventListener('click', () =>
+    $('room-modal').classList.remove('active'),
+  );
 }
 
-async function deleteRoom(id: number): Promise<void> {
-  if (!confirm('למחוק חדר זה וכל מדפיו? הספרים יפונו.')) return;
-  try {
-    await api.del('/rooms/' + id);
-    await fetchAllData();
+/** Delete a room after confirmation. */
+(window as any).deleteRoom = async function (id: number) {
+  if (!confirm('בטוח למחוק חדר זה?')) return;
+  await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
+  loadRooms();
+};
+
+/** Open the shelf create modal for a given room. */
+(window as any).openShelfModal = function (roomId: number) {
+  ($('shelf-form') as HTMLFormElement).reset();
+  ($('shelf-id') as HTMLInputElement).value = '';
+  ($('shelf-room-id') as HTMLInputElement).value = String(roomId);
+  $('shelf-modal-title').textContent = 'הוסף מדף';
+  $('shelf-modal').classList.add('active');
+};
+
+/** Save shelf (create) from the modal. */
+function initShelfModal() {
+  $('shelf-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const roomId = Number($v('shelf-room-id'));
+    const name = ($('shelf-name') as HTMLInputElement).value.trim();
+    if (!name) return;
+
+    await fetch(`/api/rooms/${roomId}/shelves`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    $('shelf-modal').classList.remove('active');
     loadRooms();
-  } catch (err: any) {
-    alert(err.message);
-  }
+  });
+
+  $('btn-close-shelf-modal').addEventListener('click', () =>
+    $('shelf-modal').classList.remove('active'),
+  );
+  $('btn-cancel-shelf').addEventListener('click', () =>
+    $('shelf-modal').classList.remove('active'),
+  );
 }
 
-// ========== SHELF MODAL ==========
+/** Delete a shelf after confirmation. */
+(window as any).deleteShelf = async function (id: number) {
+  if (!confirm('בטוח למחוק מדף זה?')) return;
+  await fetch(`/api/shelves/${id}`, { method: 'DELETE' });
+  loadRooms();
+};
 
-function openShelfModal(roomId: number, shelf: Shelf | null = null): void {
-  (document.getElementById('shelf-room-id') as HTMLInputElement).value = String(roomId);
-  if (shelf) {
-    document.getElementById('shelf-modal-title')!.textContent = 'ערוך מדף';
-    (document.getElementById('shelf-id') as HTMLInputElement).value = String(shelf.id);
-    (document.getElementById('shelf-name') as HTMLInputElement).value = shelf.name;
-  } else {
-    document.getElementById('shelf-modal-title')!.textContent = 'הוסף מדף';
-    (document.getElementById('shelf-form') as HTMLFormElement).reset();
-    (document.getElementById('shelf-id') as HTMLInputElement).value = '';
-    (document.getElementById('shelf-room-id') as HTMLInputElement).value = String(roomId);
-  }
-  document.getElementById('shelf-modal')!.classList.add('active');
+// ════════════════════════════════════════════════════════════
+// 8. Users view (admin)
+// ════════════════════════════════════════════════════════════
+
+/** Fetch and render the users table. */
+async function loadUsers() {
+  const res = await fetch('/api/users');
+  if (!res.ok) return;
+  allUsers = await res.json();
+  renderUsers();
 }
 
-function closeShelfModal(): void {
-  document.getElementById('shelf-modal')!.classList.remove('active');
-}
-
-async function saveShelf(e: Event): Promise<void> {
-  e.preventDefault();
-  const id = (document.getElementById('shelf-id') as HTMLInputElement).value;
-  const data = {
-    room_id: Number((document.getElementById('shelf-room-id') as HTMLInputElement).value),
-    name: (document.getElementById('shelf-name') as HTMLInputElement).value,
-  };
-  try {
-    if (id) await api.put('/shelves/' + id, data);
-    else await api.post('/shelves', data);
-    closeShelfModal();
-    await fetchAllData();
-    loadRooms();
-  } catch (err: any) {
-    alert(err.message);
-  }
-}
-
-async function deleteShelf(id: number): Promise<void> {
-  if (!confirm('למחוק מדף זה? הספרים עליו יפונו.')) return;
-  try {
-    await api.del('/shelves/' + id);
-    await fetchAllData();
-    loadRooms();
-  } catch (err: any) {
-    alert(err.message);
-  }
-}
-
-// ========== USERS (admin) ==========
-
-async function loadUsers(): Promise<void> {
-  try {
-    lastUsers = await api.get('/users') as UserRow[];
-    renderUsers();
-  } catch (err: any) {
-    alert(err.message);
-  }
-}
-
-function renderUsers(): void {
-  const container = document.getElementById('users-list')!;
-  const rows = lastUsers.map(u => {
-    const perms = u.role === 'editor'
-      ? (u.allowed_room_ids?.length
-        ? `${u.allowed_room_ids.length} חדרים`
-        : 'אין חדרים מוקצים')
-      : (u.role === 'admin' ? 'הכל' : '—');
-    const deleteBtn = currentUser && u.id !== currentUser.id
-      ? `<button class="btn btn-danger btn-small" data-action="delete-user" data-id="${u.id}" data-name="${esc(u.username)}">מחק</button>`
-      : '';
-    return `
-      <tr>
-        <td>${esc(u.username)}${currentUser && u.id === currentUser.id ? ' <span class="tag">(אתה)</span>' : ''}</td>
-        <td><span class="role-badge badge-${u.role}">${roleLabel(u.role)}</span></td>
-        <td>${perms}</td>
-        <td>${u.created_at ? new Date(u.created_at).toLocaleDateString('he-IL') : ''}</td>
-        <td class="row-actions">
-          <button class="btn btn-primary btn-small" data-action="edit-user" data-id="${u.id}">ערוך</button>
-          ${deleteBtn}
-        </td>
-      </tr>
-    `;
-  }).join('');
-  container.innerHTML = `
-    <table class="users-table">
-      <thead>
-        <tr><th>שם משתמש</th><th>תפקיד</th><th>הרשאות עריכה</th><th>נוצר</th><th></th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-}
-
-function openUserModal(user: UserRow | null = null): void {
-  buildUserRoomCheckboxes(user?.allowed_room_ids || []);
-  const roleSelect = document.getElementById('user-role') as HTMLSelectElement;
-  const passwordInput = document.getElementById('user-password') as HTMLInputElement;
-  const hint = document.getElementById('password-hint')!;
-  if (user) {
-    document.getElementById('user-modal-title')!.textContent = 'ערוך משתמש';
-    (document.getElementById('user-id') as HTMLInputElement).value = String(user.id);
-    (document.getElementById('user-username') as HTMLInputElement).value = user.username;
-    passwordInput.value = '';
-    passwordInput.required = false;
-    hint.style.display = 'block';
-    roleSelect.value = user.role;
-  } else {
-    document.getElementById('user-modal-title')!.textContent = 'הוסף משתמש';
-    (document.getElementById('user-form') as HTMLFormElement).reset();
-    (document.getElementById('user-id') as HTMLInputElement).value = '';
-    passwordInput.required = true;
-    hint.style.display = 'none';
-    roleSelect.value = 'viewer';
-  }
-  toggleUserRoomsGroup();
-  document.getElementById('user-modal')!.classList.add('active');
-}
-
-function closeUserModal(): void {
-  document.getElementById('user-modal')!.classList.remove('active');
-}
-
-function buildUserRoomCheckboxes(allowedIds: number[]): void {
-  const container = document.getElementById('user-rooms')!;
-  container.innerHTML = cacheRooms.map(r => `
-    <label class="room-checkbox">
-      <input type="checkbox" value="${r.id}" ${allowedIds.includes(r.id) ? 'checked' : ''}>
-      ${esc(r.name)}
-    </label>
-  `).join('');
-}
-
-function toggleUserRoomsGroup(): void {
-  const role = (document.getElementById('user-role') as HTMLSelectElement).value;
-  document.getElementById('user-rooms-group')!.style.display = role === 'editor' ? '' : 'none';
-}
-
-async function saveUser(e: Event): Promise<void> {
-  e.preventDefault();
-  const id = (document.getElementById('user-id') as HTMLInputElement).value;
-  const username = (document.getElementById('user-username') as HTMLInputElement).value.trim();
-  const password = (document.getElementById('user-password') as HTMLInputElement).value;
-  const role = (document.getElementById('user-role') as HTMLSelectElement).value as Role;
-  const allowed_room_ids = Array.from(
-    document.querySelectorAll<HTMLInputElement>('#user-rooms input:checked')
-  ).map(cb => Number(cb.value));
-
-  if (!id && password.length < 6) {
-    alert('סיסמה חייבת להכיל לפחות 6 תווים');
+/** Render the admin users table. */
+function renderUsers() {
+  const container = $('users-list');
+  if (allUsers.length === 0) {
+    container.innerHTML =
+      '<div class="empty-state"><h3>👥</h3><p>אין משתמשים</p></div>';
     return;
   }
 
-  const data: Record<string, unknown> = { username, role };
-  if (!id || password) data.password = password;
-  if (role === 'editor') data.allowed_room_ids = allowed_room_ids;
+  const rows = allUsers
+    .map((u) => {
+      const roleLabel =
+        u.role === 'admin'
+          ? 'מנהל'
+          : u.role === 'editor'
+          ? 'עורך'
+          : 'צופה';
+      const rooms = u.allowedRoomIds
+        .map((rid) => {
+          const r = allRooms.find((rm) => rm.id === rid);
+          return r ? escHtml(r.name) : `#${rid}`;
+        })
+        .join(', ');
 
-  try {
-    if (id) await api.put('/users/' + id, data);
-    else await api.post('/users', data);
-    closeUserModal();
-    await loadUsers();
-  } catch (err: any) {
-    alert(err.message);
-  }
+      return `
+        <tr>
+          <td>${escHtml(u.username)}</td>
+          <td>${roleLabel}</td>
+          <td>${rooms || '—'}</td>
+          <td class="row-actions">
+            <button class="btn btn-primary btn-small" onclick="openUserModal(${u.id})">עריכה</button>
+            <button class="btn btn-danger btn-small" onclick="deleteUser(${u.id})">מחיקה</button>
+          </td>
+        </tr>`;
+    })
+    .join('');
+
+  container.innerHTML = `
+    <table class="users-table">
+      <thead>
+        <tr>
+          <th>שם משתמש</th>
+          <th>תפקיד</th>
+          <th>חדרים מותרים</th>
+          <th>פעולות</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
-async function deleteUser(id: number, username: string): Promise<void> {
-  if (!confirm(`למחוק את המשתמש "${username}"?`)) return;
-  try {
-    await api.del('/users/' + id);
-    await loadUsers();
-  } catch (err: any) {
-    alert(err.message);
+/** Open user modal for create or edit. */
+(window as any).openUserModal = async function (userId?: number) {
+  const form = $('user-form') as HTMLFormElement;
+  form.reset();
+  ($('user-id') as HTMLInputElement).value = '';
+  $('password-hint').style.display = 'none';
+  ($('user-password') as HTMLInputElement).required = true;
+
+  // Populate room checkboxes
+  const grid = $('user-rooms');
+  grid.innerHTML = allRooms
+    .map(
+      (r) => `
+        <label class="room-checkbox">
+          <input type="checkbox" name="allowed_rooms" value="${r.id}"> ${escHtml(r.name)}
+        </label>`,
+    )
+    .join('');
+
+  if (userId) {
+      $('user-modal-title').textContent = 'ערוך משתמש';
+      const user = allUsers.find((u) => u.id === userId);
+      if (user) {
+        ($('user-id') as HTMLInputElement).value = String(user.id);
+      ($('user-username') as HTMLInputElement).value = user.username;
+      ($('user-role') as HTMLSelectElement).value = user.role;
+      $('password-hint').style.display = '';
+      ($('user-password') as HTMLInputElement).required = false;
+      toggleUserRooms();
+      // Check allowed rooms
+      for (const rid of user.allowedRoomIds) {
+        const cb = grid.querySelector(
+          `input[value="${rid}"]`,
+        ) as HTMLInputElement;
+        if (cb) cb.checked = true;
+      }
+    }
+  } else {
+    $('user-modal-title').textContent = 'הוסף משתמש';
+    toggleUserRooms();
   }
+  $('user-modal').classList.add('active');
+};
+
+/** Show/hide room checkboxes based on role selection. */
+function toggleUserRooms() {
+  const role = ($('user-role') as HTMLSelectElement).value;
+  $('user-rooms-group').style.display = role === 'editor' ? '' : 'none';
 }
 
-// ========== UTILS ==========
+/** Save user (create or update) from the modal. */
+function initUserModal() {
+  $('user-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = $v('user-id');
+    const username = ($('user-username') as HTMLInputElement).value.trim();
+    const password = ($('user-password') as HTMLInputElement).value;
+    const role = ($('user-role') as HTMLSelectElement).value;
 
-function esc(str: string): string {
-  if (!str) return '';
+    const allowedRoomIds = Array.from(
+      document.querySelectorAll('input[name="allowed_rooms"]:checked'),
+    ).map((cb) => Number((cb as HTMLInputElement).value));
+
+    const data: Record<string, any> = { username, role, allowed_room_ids: allowedRoomIds };
+    if (password) data.password = password;
+
+    if (id) {
+      await fetch(`/api/users/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    } else {
+      data.password = password;
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    }
+    $('user-modal').classList.remove('active');
+    loadUsers();
+  });
+
+  $('user-role').addEventListener('change', toggleUserRooms);
+  $('btn-close-user-modal').addEventListener('click', () =>
+    $('user-modal').classList.remove('active'),
+  );
+  $('btn-cancel-user').addEventListener('click', () =>
+    $('user-modal').classList.remove('active'),
+  );
+}
+
+/** Delete a user after confirmation. */
+(window as any).deleteUser = async function (id: number) {
+  if (!confirm('בטוח למחוק משתמש זה?')) return;
+  await fetch(`/api/users/${id}`, { method: 'DELETE' });
+  loadUsers();
+};
+
+// ════════════════════════════════════════════════════════════
+// 9. Profile modal (self-service password change)
+// ════════════════════════════════════════════════════════════
+
+function initProfileModal() {
+  $('btn-profile').addEventListener('click', () => {
+    ($('profile-form') as HTMLFormElement).reset();
+    $('profile-error').style.display = 'none';
+    $('profile-modal').classList.add('active');
+  });
+
+  $('profile-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const current = ($('profile-current-password') as HTMLInputElement).value;
+    const newPw = ($('profile-new-password') as HTMLInputElement).value;
+    const confirm = ($('profile-confirm-password') as HTMLInputElement).value;
+    const errEl = $('profile-error');
+
+    if (newPw !== confirm) {
+      errEl.textContent = 'הסיסמאות אינן תואמות';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/me', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_password: current,
+          new_password: newPw,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        errEl.textContent = data.error || 'שגיאה';
+        errEl.style.display = 'block';
+        return;
+      }
+      $('profile-modal').classList.remove('active');
+      alert('הסיסמה שונתה בהצלחה');
+    } catch {
+      errEl.textContent = 'שגיאת רשת';
+      errEl.style.display = 'block';
+    }
+  });
+
+  $('btn-close-profile-modal').addEventListener('click', () =>
+    $('profile-modal').classList.remove('active'),
+  );
+  $('btn-cancel-profile').addEventListener('click', () =>
+    $('profile-modal').classList.remove('active'),
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// 10. Boot
+// ════════════════════════════════════════════════════════════
+
+/** Escape HTML to prevent XSS in rendered strings. */
+function escHtml(str: string): string {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
 
-// ========== DELEGATED EVENT HANDLERS ==========
+/** Initialize all event listeners and try to restore the session. */
+function boot() {
+  initLoginForm();
+  initLogout();
+  initRoomModal();
+  initShelfModal();
+  initUserModal();
+  initProfileModal();
 
-function initDelegatedHandlers(): void {
-  document.addEventListener('click', (e) => {
-    const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement;
-    if (!target) return;
-    const action = target.dataset.action!;
-    const id = Number(target.dataset.id);
-    const roomId = Number(target.dataset.roomId);
-    const name = target.dataset.name || '';
+  // Nav buttons
+  document.querySelectorAll('.nav-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const view = btn.getAttribute('data-view');
+      if (view) switchView(view);
+    });
+  });
 
-    switch (action) {
-      case 'edit-book': editBook(id); break;
-      case 'delete-book': deleteBook(id); break;
-      case 'edit-room': {
-        const room = cacheRooms.find(r => r.id === id);
-        if (room) openRoomModal(room);
-        break;
-      }
-      case 'delete-room': deleteRoom(id); break;
-      case 'edit-shelf': {
-        const shelf = cacheShelves.find(s => s.id === id);
-        if (shelf) openShelfModal(shelf.room_id, shelf);
-        break;
-      }
-      case 'delete-shelf': deleteShelf(id); break;
-      case 'add-shelf': openShelfModal(roomId); break;
-      case 'view-shelf': viewShelfBooks(id, name); break;
-      case 'clear-filters': clearFilters(); break;
-      case 'toggle-pending': {
-        showPendingOnly = !showPendingOnly;
-        target.className = `btn btn-small ${showPendingOnly ? 'btn-primary' : 'btn-secondary'}`;
-        booksPage = 1;
-        loadBooks();
-        break;
-      }
-      case 'goto-page':
-        booksPage = Number(target.dataset.page);
-        loadBooks();
-        break;
-      case 'edit-user': {
-        const user = lastUsers.find(u => u.id === id);
-        if (user) openUserModal(user);
-        break;
-      }
-      case 'delete-user': deleteUser(id, name); break;
-      case 'back-to-rooms': switchTo('rooms'); break;
+  // Book search with debounce
+  $('book-search').addEventListener('input', () => {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      currentPage = 1;
+      loadBooks();
+    }, 300);
+  });
+
+  // Filter dropdowns → reload books
+  ['filter-genre', 'filter-room', 'filter-shelf', 'filter-author'].forEach((id) => {
+    $(id).addEventListener('change', () => {
+      currentPage = 1;
+      loadBooks();
+    });
+  });
+
+  // Clear filters button
+  document
+    .querySelector('[data-action="clear-filters"]')
+    ?.addEventListener('click', () => {
+      ($('filter-genre') as HTMLSelectElement).value = '';
+      ($('filter-room') as HTMLSelectElement).value = '';
+      ($('filter-shelf') as HTMLSelectElement).value = '';
+      ($('filter-author') as HTMLSelectElement).value = '';
+      ($('book-search') as HTMLInputElement).value = '';
+      showPendingBooks = false;
+      currentPage = 1;
+      loadBooks();
+    });
+
+  // Book modal buttons
+  $('btn-add-book').addEventListener('click', () =>
+    (window as any).openBookModal(),
+  );
+  $('book-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveBook();
+  });
+  $('btn-close-book-modal').addEventListener('click', () =>
+    $('book-modal').classList.remove('active'),
+  );
+  $('btn-cancel-book').addEventListener('click', () =>
+    $('book-modal').classList.remove('active'),
+  );
+
+  // Genre autocomplete
+  initGenreAutocomplete();
+
+  tryRestoreSession();
+}
+
+/** Set up genre input autocomplete suggestions. */
+function initGenreAutocomplete() {
+  const input = $('book-genre') as HTMLInputElement;
+  const list = $('genre-suggestions');
+
+  input.addEventListener('input', () => {
+    const val = input.value.trim().toLowerCase();
+    if (!val) {
+      list.style.display = 'none';
+      return;
     }
+    const matches = genres.filter((g) => g.toLowerCase().includes(val));
+    if (matches.length === 0) {
+      list.style.display = 'none';
+      return;
+    }
+    list.innerHTML = matches
+      .map((g) => `<li onclick="selectGenre('${escHtml(g)}')">${escHtml(g)}</li>`)
+      .join('');
+    list.style.display = 'block';
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(() => (list.style.display = 'none'), 150);
   });
 }
 
-// ========== PROFILE ==========
+/** Fill the genre input from autocomplete suggestion. */
+(window as any).selectGenre = function (genre: string) {
+  ($('book-genre') as HTMLInputElement).value = genre;
+  $('genre-suggestions').style.display = 'none';
+};
 
-function openProfileModal(): void {
-  document.getElementById('profile-modal')!.classList.add('active');
-  (document.getElementById('profile-current-password') as HTMLInputElement).value = '';
-  (document.getElementById('profile-new-password') as HTMLInputElement).value = '';
-  (document.getElementById('profile-confirm-password') as HTMLInputElement).value = '';
-  document.getElementById('profile-error')!.style.display = 'none';
+/** Load dashboard stats (admin only). */
+async function loadDashboard() {
+  const res = await fetch('/api/stats');
+  if (!res.ok) return;
+  const s = await res.json();
+  $('stats').innerHTML = `
+    <div class="stat-card"><h3>${s.books}</h3><p>ספרים</p></div>
+    <div class="stat-card"><h3>${s.shelves}</h3><p>מדפים</p></div>
+    <div class="stat-card"><h3>${s.rooms}</h3><p>חדרים</p></div>
+    <div class="stat-card"><h3>${s.users}</h3><p>משתמשים</p></div>
+    <div class="stat-card"><h3>${s.pendingBooks}</h3><p>ספרים ממתינים</p></div>`;
 }
 
-function closeProfileModal(): void {
-  document.getElementById('profile-modal')!.classList.remove('active');
+/** Initialize filter dropdown options from cached data. */
+function populateFilters() {
+  // Genres
+  const g = $('filter-genre') as HTMLSelectElement;
+  g.innerHTML = '<option value="">כל הז\'אנרים</option>';
+  genres.forEach((gen) => {
+    const opt = document.createElement('option');
+    opt.value = gen;
+    opt.textContent = gen;
+    g.appendChild(opt);
+  });
+
+  // Rooms
+  const r = $('filter-room') as HTMLSelectElement;
+  r.innerHTML = '<option value="">כל החדרים</option>';
+  allRooms.forEach((room) => {
+    const opt = document.createElement('option');
+    opt.value = String(room.id);
+    opt.textContent = room.name;
+    r.appendChild(opt);
+  });
+
+  // Shelves
+  const s = $('filter-shelf') as HTMLSelectElement;
+  s.innerHTML = '<option value="">כל המדפים</option>';
+  allShelves.forEach((shelf) => {
+    const opt = document.createElement('option');
+    opt.value = String(shelf.id);
+    opt.textContent = shelf.name;
+    s.appendChild(opt);
+  });
+
+  // Authors
+  const a = $('filter-author') as HTMLSelectElement;
+  a.innerHTML = '<option value="">כל המחברים</option>';
+  authors.forEach((auth) => {
+    const opt = document.createElement('option');
+    opt.value = auth;
+    opt.textContent = auth;
+    a.appendChild(opt);
+  });
 }
 
-async function saveProfile(e: Event): Promise<void> {
-  e.preventDefault();
-  const errorEl = document.getElementById('profile-error')!;
-  errorEl.style.display = 'none';
-  const current = (document.getElementById('profile-current-password') as HTMLInputElement).value;
-  const newPass = (document.getElementById('profile-new-password') as HTMLInputElement).value;
-  const confirm = (document.getElementById('profile-confirm-password') as HTMLInputElement).value;
-  if (newPass !== confirm) {
-    errorEl.textContent = 'הסיסמאות החדשות אינן תואמות';
-    errorEl.style.display = 'block';
-    return;
-  }
-  try {
-    await api.put('/auth/me', { current_password: current, new_password: newPass });
-    closeProfileModal();
-    alert('הסיסמה שונתה בהצלחה');
-  } catch (err: any) {
-    errorEl.textContent = err.message;
-    errorEl.style.display = 'block';
-  }
+/** Fetch all reference data needed for filter dropdowns and autocomplete. */
+async function fetchAllData() {
+  const [genresRes, authorsRes, roomsRes] = await Promise.all([
+    fetch('/api/genres'),
+    fetch('/api/authors'),
+    fetch('/api/rooms'),
+  ]);
+  if (genresRes.ok) genres = await genresRes.json();
+  if (authorsRes.ok) authors = await authorsRes.json();
+  if (roomsRes.ok) allRooms = await roomsRes.json();
+
+  // Fetch all shelves
+  const shelvesArrays = await Promise.all(
+    allRooms.map((r) =>
+      fetch(`/api/rooms/${r.id}/shelves`).then((res) =>
+        res.ok ? res.json() : ([] as Shelf[]),
+      ),
+    ),
+  );
+  allShelves = shelvesArrays.flat();
+  populateFilters();
 }
 
-// ========== INIT ==========
-
-document.getElementById('login-form')!.addEventListener('submit', handleLogin);
-document.getElementById('btn-logout')!.addEventListener('click', logout);
-document.getElementById('btn-profile')!.addEventListener('click', openProfileModal);
-document.getElementById('btn-close-profile-modal')!.addEventListener('click', closeProfileModal);
-document.getElementById('btn-cancel-profile')!.addEventListener('click', closeProfileModal);
-document.getElementById('profile-form')!.addEventListener('submit', saveProfile);
-
-const addBookBtn = document.getElementById('btn-add-book');
-if (addBookBtn) addBookBtn.addEventListener('click', () => openBookModal());
-document.getElementById('btn-add-room')!.addEventListener('click', () => openRoomModal());
-document.getElementById('btn-close-book-modal')!.addEventListener('click', closeBookModal);
-document.getElementById('btn-cancel-book')!.addEventListener('click', closeBookModal);
-document.getElementById('btn-close-room-modal')!.addEventListener('click', closeRoomModal);
-document.getElementById('btn-cancel-room')!.addEventListener('click', closeRoomModal);
-document.getElementById('btn-close-shelf-modal')!.addEventListener('click', closeShelfModal);
-document.getElementById('btn-cancel-shelf')!.addEventListener('click', closeShelfModal);
-document.getElementById('book-form')!.addEventListener('submit', saveBook);
-document.getElementById('room-form')!.addEventListener('submit', saveRoom);
-document.getElementById('shelf-form')!.addEventListener('submit', saveShelf);
-
-document.getElementById('btn-add-user')!.addEventListener('click', () => openUserModal());
-document.getElementById('btn-close-user-modal')!.addEventListener('click', closeUserModal);
-document.getElementById('btn-cancel-user')!.addEventListener('click', closeUserModal);
-document.getElementById('user-form')!.addEventListener('submit', saveUser);
-document.getElementById('user-role')!.addEventListener('change', toggleUserRoomsGroup);
-
-initNav();
-initBookSearch();
-initDelegatedHandlers();
-
-boot();
+// ── Start ───────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  boot();
+  fetchAllData();
+});

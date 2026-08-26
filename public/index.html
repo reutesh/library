@@ -7,6 +7,10 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+
+  <!-- ======================================================
+       Login screen — full-screen overlay shown when unauthenticated
+       ====================================================== -->
   <div id="login-screen">
     <form id="login-form" class="login-card">
       <h1>📚 מנהל ספרייה</h1>
@@ -24,7 +28,12 @@
     </form>
   </div>
 
+  <!-- ======================================================
+       Main app shell — visible only after login
+       ====================================================== -->
   <div id="app">
+
+    <!-- ── Header: title bar + user info + nav ──────────── -->
     <header>
       <div class="header-row">
         <h1>📚 מנהל ספרייה</h1>
@@ -44,6 +53,7 @@
     </header>
 
     <main>
+      <!-- ── Dashboard view (admin only) ────────────────── -->
       <section id="view-dashboard" class="view">
         <h2>לוח בקרה</h2>
         <div id="stats" class="stats-grid"></div>
@@ -51,6 +61,7 @@
         <div id="unassigned-books" class="book-grid"></div>
       </section>
 
+      <!-- ── Books view (default) ───────────────────────── -->
       <section id="view-books" class="view active">
         <div class="view-header" id="books-view-header">
           <h2>הספרים שלי</h2>
@@ -70,6 +81,7 @@
         <div id="pagination-bar"></div>
       </section>
 
+      <!-- ── Rooms & shelves view ───────────────────────── -->
       <section id="view-rooms" class="view">
         <div class="view-header">
           <h2>חדרים ומדפים</h2>
@@ -78,6 +90,7 @@
         <div id="rooms-list" class="rooms-container"></div>
       </section>
 
+      <!-- ── Users view (admin only) ────────────────────── -->
       <section id="view-users" class="view">
         <div class="view-header">
           <h2>ניהול משתמשים</h2>
@@ -87,7 +100,11 @@
       </section>
     </main>
 
-    <!-- Book Modal -->
+    <!-- ====================================================
+         Modals
+         ==================================================== -->
+
+    <!-- Book create / edit modal -->
     <div id="book-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -133,7 +150,7 @@
       </div>
     </div>
 
-    <!-- Room Modal -->
+    <!-- Room create modal -->
     <div id="room-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -154,7 +171,7 @@
       </div>
     </div>
 
-    <!-- Shelf Modal -->
+    <!-- Shelf create modal -->
     <div id="shelf-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -175,7 +192,8 @@
         </form>
       </div>
     </div>
-    <!-- User Modal -->
+
+    <!-- User create / edit modal (admin only) -->
     <div id="user-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">
@@ -213,7 +231,7 @@
       </div>
     </div>
 
-    <!-- Profile Modal -->
+    <!-- Profile / password change modal -->
     <div id="profile-modal" class="modal">
       <div class="modal-content">
         <div class="modal-header">

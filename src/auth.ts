@@ -1,147 +1,150 @@
+/*
+ * src/auth.ts — Authentication & session management
+ *
+ * Zero-dependency auth stack:
+ *   1. Passwords are hashed with Node's built-in scrypt (salt:hex_digest).
+ *   2. Sessions are stateless HMAC-SHA256 signed cookies (7-day TTL).
+ *   3. Login rate-limiting: 10 failures per IP per 15-minute window.
+ *   4. On first boot the admin account is auto-created from .env values
+ *      (only if app_users is empty).
+ */
+
 import crypto from 'crypto';
-import type { Request, Response, NextFunction } from 'express';
-import { supaGet, supaPost } from './db';
+import { supaGet, supaPost, type DbUser } from './db';
 
-const SESSION_SECRET = process.env.SESSION_SECRET;
+// ── Password hashing ────────────────────────────────────────
 
-if (!SESSION_SECRET) {
-  console.error('Missing SESSION_SECRET in environment variables');
-  process.exit(1);
+/** Random 16-byte hex salt. */
+function generateSalt(): string {
+  return crypto.randomBytes(16).toString('hex');
 }
 
-export interface AppUser {
-  id: number;
-  username: string;
-  role: 'admin' | 'editor' | 'viewer';
-  allowed_room_ids: number[];
+/**
+ * Derive a scrypt hash from a plaintext password.
+ * Returns `salt:hex_digest`.
+ */
+function deriveHash(password: string, salt?: string): string {
+  const s = salt ?? generateSalt();
+  const hash = crypto.scryptSync(password, s, 64).toString('hex');
+  return `${s}:${hash}`;
 }
 
-export function publicUser(user: AppUser) {
-  return { id: user.id, username: user.username, role: user.role, allowed_room_ids: user.allowed_room_ids };
+/**
+ * Constant-time comparison to prevent timing attacks.
+ * Returns true when the plaintext matches the stored `salt:hash`.
+ */
+export function verifyPassword(plaintext: string, stored: string): boolean {
+  const [salt, expectedHash] = stored.split(':');
+  const actualHash = crypto.scryptSync(plaintext, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), Buffer.from(expectedHash, 'hex'));
 }
 
-// ========== PASSWORDS ==========
+// ── Session signing ─────────────────────────────────────────
 
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
+const SESSION_SECRET = process.env.SESSION_SECRET!;
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+export interface SessionPayload {
+  userId: number;
+  expiresAt: number;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const candidate = crypto.scryptSync(password, salt, 64);
-  const expected = Buffer.from(hash, 'hex');
-  return candidate.length === expected.length && crypto.timingSafeEqual(candidate, expected);
+/**
+ * Create a signed session cookie value.
+ * Format: base64url(payload).base64url(hmac).
+ */
+export function signSession(userId: number): string {
+  const payload: SessionPayload = {
+    userId,
+    expiresAt: Date.now() + SESSION_MAX_AGE_MS,
+  };
+  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(data)
+    .digest('base64url');
+  return `${data}.${sig}`;
 }
 
-// ========== SESSION TOKENS (HMAC-signed, stateless) ==========
-
-function sign(data: string): string {
-  return crypto.createHmac('sha256', SESSION_SECRET!).update(data).digest('base64url');
-}
-
-export function createSessionToken(userId: number): string {
-  const payload = Buffer.from(JSON.stringify({ uid: userId, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 })).toString('base64url');
-  return `${payload}.${sign(payload)}`;
-}
-
-function readSessionToken(token: string): number | null {
-  const [payload, sig] = token.split('.');
-  if (!payload || !sig) return null;
-  const a = Buffer.from(sig);
-  const b = Buffer.from(sign(payload));
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+/**
+ * Verify and decode a signed session cookie.
+ * Returns the payload on success, null if invalid or expired.
+ */
+export function verifySession(cookie: string | undefined): SessionPayload | null {
+  if (!cookie) return null;
   try {
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    if (typeof data.uid !== 'number' || typeof data.exp !== 'number') return null;
-    if (Date.now() > data.exp) return null;
-    return data.uid;
+    const [data, sig] = cookie.split('.');
+    if (!data || !sig) return null;
+
+    const expected = crypto
+      .createHmac('sha256', SESSION_SECRET)
+      .update(data)
+      .digest('base64url');
+
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+      return null;
+    }
+
+    const payload: SessionPayload = JSON.parse(
+      Buffer.from(data, 'base64url').toString(),
+    );
+
+    if (Date.now() > payload.expiresAt) return null;
+    return payload;
   } catch {
     return null;
   }
 }
 
-const COOKIE_NAME = 'session';
+// ── Login rate-limiting ─────────────────────────────────────
 
-function parseCookies(req: Request): Record<string, string> {
-  const out: Record<string, string> = {};
-  (req.headers.cookie || '').split(';').forEach(part => {
-    const idx = part.indexOf('=');
-    if (idx > -1) out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+interface RateEntry {
+  count: number;
+  windowStart: number;
+}
+
+const rateLimitMap = new Map<string, RateEntry>();
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX = 10;
+
+/**
+ * Returns true if the IP has exceeded the login failure limit.
+ * Automatically resets after the window expires.
+ */
+export function isRateLimited(ip: string): boolean {
+  const entry = rateLimitMap.get(ip);
+  if (!entry || Date.now() - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.set(ip, { count: 1, windowStart: Date.now() });
+    return false;
+  }
+  entry.count++;
+  return entry.count > RATE_LIMIT_MAX;
+}
+
+// ── Bootstrap admin ─────────────────────────────────────────
+
+/**
+ * On first run, create the admin user from .env if the table is empty.
+ * Safe to call on every server start — idempotent.
+ */
+export async function bootstrapAdmin(): Promise<void> {
+  const users = await supaGet<DbUser>('app_users', { select: 'id', limit: '1' });
+  if (users.length > 0) return;
+
+  const username = process.env.ADMIN_USERNAME ?? 'admin';
+  const password = process.env.ADMIN_PASSWORD ?? 'admin123';
+  const hash = deriveHash(password);
+
+  await supaPost('app_users', {
+    username,
+    password_hash: hash,
+    role: 'admin',
+    allowed_room_ids: [],
   });
-  return out;
+
+  console.log(`[auth] Bootstrap admin created: ${username}`);
 }
 
-export function setSessionCookie(res: Response, userId: number): void {
-  const token = createSessionToken(userId);
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`);
-}
+// ── Password hash export (used by routes to create new users) ──
 
-export function clearSessionCookie(res: Response): void {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
-}
-
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace Express {
-    interface Request {
-      user?: AppUser;
-    }
-  }
-}
-
-export async function attachUser(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  req.user = undefined;
-  const token = parseCookies(req)[COOKIE_NAME];
-  if (token) {
-    const uid = readSessionToken(token);
-    if (uid !== null) {
-      try {
-        const rows = await supaGet('app_users', `id=eq.${uid}&select=id,username,role,allowed_room_ids`) as unknown as AppUser[];
-        if (rows.length) req.user = rows[0] as AppUser;
-      } catch {
-        req.user = undefined;
-      }
-    }
-  }
-  next();
-}
-
-// ========== LOGIN RATE LIMITING ==========
-
-const failures = new Map<string, { count: number; resetAt: number }>();
-const MAX_ATTEMPTS = 10;
-const WINDOW_MS = 15 * 60 * 1000;
-
-export function loginRateLimited(key: string): boolean {
-  const rec = failures.get(key);
-  return !!rec && Date.now() < rec.resetAt && rec.count >= MAX_ATTEMPTS;
-}
-
-export function recordLoginFailure(key: string): void {
-  const rec = failures.get(key);
-  if (!rec || Date.now() > rec.resetAt) failures.set(key, { count: 1, resetAt: Date.now() + WINDOW_MS });
-  else rec.count++;
-}
-
-export function clearLoginFailures(key: string): void {
-  failures.delete(key);
-}
-
-// ========== FIRST ADMIN BOOTSTRAP ==========
-
-let bootstrapped = false;
-
-export async function ensureBootstrapAdmin(): Promise<void> {
-  if (bootstrapped) return;
-  const existing = await supaGet('app_users', 'select=id&limit=1');
-  if (!existing.length) {
-    const username = process.env.ADMIN_USERNAME || 'admin';
-    const password = process.env.ADMIN_PASSWORD || 'admin123';
-    await supaPost('app_users', { username, password_hash: hashPassword(password), role: 'admin' });
-    console.log(`Created initial admin account "${username}" - change its password from the Users page`);
-  }
-  bootstrapped = true;
-}
+export { deriveHash };
