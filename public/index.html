@@ -36,22 +36,22 @@
         </div>
       </div>
       <nav>
-        <button class="nav-btn active" data-view="dashboard">לוח בקרה</button>
-        <button class="nav-btn" data-view="books">ספרים</button>
+        <button class="nav-btn" data-view="dashboard" id="nav-dashboard" style="display:none">לוח בקרה</button>
+        <button class="nav-btn active" data-view="books">ספרים</button>
         <button class="nav-btn" data-view="rooms">חדרים ומדפים</button>
         <button class="nav-btn" data-view="users" id="nav-users" style="display:none">ניהול משתמשים</button>
       </nav>
     </header>
 
     <main>
-      <section id="view-dashboard" class="view active">
+      <section id="view-dashboard" class="view">
         <h2>לוח בקרה</h2>
         <div id="stats" class="stats-grid"></div>
         <h3>ספרים לא מוקצים</h3>
         <div id="unassigned-books" class="book-grid"></div>
       </section>
 
-      <section id="view-books" class="view">
+      <section id="view-books" class="view active">
         <div class="view-header" id="books-view-header">
           <h2>הספרים שלי</h2>
           <div class="actions">

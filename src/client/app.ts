@@ -85,7 +85,7 @@ const api = {
 // ========== STATE ==========
 
 let currentUser: PublicUser | null = null;
-let currentView = 'dashboard';
+let currentView = 'books';
 let activeFilters: { search: string; shelf_id: string; room_id: string; genre: string; author: string } = {
   search: '', shelf_id: '', room_id: '', genre: '', author: '',
 };
@@ -183,6 +183,7 @@ function applyRoleUI(): void {
   badge.textContent = roleLabel(currentUser.role);
   badge.className = 'role-badge badge-' + currentUser.role;
   document.getElementById('nav-users')!.style.display = isAdmin() ? '' : 'none';
+  document.getElementById('nav-dashboard')!.style.display = isAdmin() ? '' : 'none';
   document.getElementById('btn-add-room')!.style.display = isAdmin() ? '' : 'none';
 }
 
