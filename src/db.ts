@@ -15,18 +15,18 @@ const headers = {
   'Prefer': 'return=representation',
 };
 
-async function supaGet(table: string, query = ''): Promise<any[]> {
+async function supaGet<T = Record<string, unknown>>(table: string, query = ''): Promise<T[]> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<any[]>;
+  return res.json() as Promise<T[]>;
 }
 
-async function supaGetWithCount(table: string, query = ''): Promise<{ data: any[]; total: number }> {
+async function supaGetWithCount<T = Record<string, unknown>>(table: string, query = ''): Promise<{ data: T[]; total: number }> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
   const res = await fetch(url, { headers: { ...headers, Prefer: 'count=exact' } });
   if (!res.ok) throw new Error(await res.text());
-  const data = (await res.json()) as any[];
+  const data = (await res.json()) as T[];
   const range = res.headers.get('content-range');
   let total = data.length;
   if (range && range.includes('/')) {
@@ -36,7 +36,7 @@ async function supaGetWithCount(table: string, query = ''): Promise<{ data: any[
   return { data, total };
 }
 
-async function supaPost(table: string, body: Record<string, unknown>) {
+async function supaPost<T = Record<string, unknown>>(table: string, body: Record<string, unknown>): Promise<T> {
   const url = `${SUPABASE_URL}/rest/v1/${table}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -44,10 +44,10 @@ async function supaPost(table: string, body: Record<string, unknown>) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
-  return ((await res.json()) as any[])[0];
+  return ((await res.json()) as T[])[0];
 }
 
-async function supaUpdate(table: string, id: number | string, body: Record<string, unknown>) {
+async function supaUpdate<T = Record<string, unknown>>(table: string, id: number | string, body: Record<string, unknown>): Promise<T> {
   const url = `${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`;
   const res = await fetch(url, {
     method: 'PATCH',
@@ -55,7 +55,7 @@ async function supaUpdate(table: string, id: number | string, body: Record<strin
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());
-  return ((await res.json()) as any[])[0];
+  return ((await res.json()) as T[])[0];
 }
 
 async function supaDelete(table: string, id: number | string) {

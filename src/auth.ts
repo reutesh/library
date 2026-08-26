@@ -99,7 +99,7 @@ export async function attachUser(req: Request, _res: Response, next: NextFunctio
     const uid = readSessionToken(token);
     if (uid !== null) {
       try {
-        const rows = await supaGet('app_users', `id=eq.${uid}&select=id,username,role,allowed_room_ids`);
+        const rows = await supaGet('app_users', `id=eq.${uid}&select=id,username,role,allowed_room_ids`) as unknown as AppUser[];
         if (rows.length) req.user = rows[0] as AppUser;
       } catch {
         req.user = undefined;
