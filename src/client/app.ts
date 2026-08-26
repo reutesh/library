@@ -977,10 +977,50 @@ function initDelegatedHandlers(): void {
   });
 }
 
+// ========== PROFILE ==========
+
+function openProfileModal(): void {
+  document.getElementById('profile-modal')!.classList.add('active');
+  (document.getElementById('profile-current-password') as HTMLInputElement).value = '';
+  (document.getElementById('profile-new-password') as HTMLInputElement).value = '';
+  (document.getElementById('profile-confirm-password') as HTMLInputElement).value = '';
+  document.getElementById('profile-error')!.style.display = 'none';
+}
+
+function closeProfileModal(): void {
+  document.getElementById('profile-modal')!.classList.remove('active');
+}
+
+async function saveProfile(e: Event): Promise<void> {
+  e.preventDefault();
+  const errorEl = document.getElementById('profile-error')!;
+  errorEl.style.display = 'none';
+  const current = (document.getElementById('profile-current-password') as HTMLInputElement).value;
+  const newPass = (document.getElementById('profile-new-password') as HTMLInputElement).value;
+  const confirm = (document.getElementById('profile-confirm-password') as HTMLInputElement).value;
+  if (newPass !== confirm) {
+    errorEl.textContent = 'הסיסמאות החדשות אינן תואמות';
+    errorEl.style.display = 'block';
+    return;
+  }
+  try {
+    await api.put('/auth/me', { current_password: current, new_password: newPass });
+    closeProfileModal();
+    alert('הסיסמה שונתה בהצלחה');
+  } catch (err: any) {
+    errorEl.textContent = err.message;
+    errorEl.style.display = 'block';
+  }
+}
+
 // ========== INIT ==========
 
 document.getElementById('login-form')!.addEventListener('submit', handleLogin);
 document.getElementById('btn-logout')!.addEventListener('click', logout);
+document.getElementById('btn-profile')!.addEventListener('click', openProfileModal);
+document.getElementById('btn-close-profile-modal')!.addEventListener('click', closeProfileModal);
+document.getElementById('btn-cancel-profile')!.addEventListener('click', closeProfileModal);
+document.getElementById('profile-form')!.addEventListener('submit', saveProfile);
 
 const addBookBtn = document.getElementById('btn-add-book');
 if (addBookBtn) addBookBtn.addEventListener('click', () => openBookModal());

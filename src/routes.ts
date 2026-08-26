@@ -90,6 +90,28 @@ router.get('/auth/me', (req: Request, res: Response) => {
   res.json(publicUser(req.user));
 });
 
+router.put('/auth/me', async (req: Request, res: Response) => {
+  if (!req.user) return res.status(401).json({ error: 'Not logged in' });
+  const { current_password, new_password, username } = req.body || {};
+  if (!current_password) return res.status(400).json({ error: 'Current password is required' });
+  if (!new_password || String(new_password).length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  try {
+    const rows = await supaGet<DbUser>('app_users', `id=eq.${req.user.id}&select=id,password_hash`);
+    if (!rows.length || !verifyPassword(String(current_password), rows[0].password_hash || '')) {
+      return res.status(403).json({ error: 'Current password is incorrect' });
+    }
+    const updates: Record<string, unknown> = { password_hash: hashPassword(String(new_password)) };
+    if (username && String(username).trim() && String(username).trim() !== req.user.username) {
+      updates.username = String(username).trim();
+    }
+    await supaUpdate('app_users', req.user.id, updates);
+    res.json({ message: 'Password updated' });
+  } catch (err: any) {
+    if (err.message?.includes('duplicate')) return res.status(409).json({ error: 'Username already exists' });
+    safeError(res, err);
+  }
+});
+
 // ========== GUARDS ==========
 
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
