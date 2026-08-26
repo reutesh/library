@@ -587,16 +587,14 @@ router.get(
     if (req.query.author) params.author = `eq.${req.query.author}`;
     if (req.query.shelf) params.shelf_id = `eq.${req.query.shelf}`;
 
-    // Room filter: requires a join through shelves
-    let roomBookIds: number[] | null = null;
-    if (req.query.room) {
+    // Room filter: expand room → shelf IDs (only if no explicit shelf filter)
+    if (req.query.room && !req.query.shelf) {
       const roomId = Number(req.query.room);
       const roomShelves = await supaGet<DbShelf>('shelves', {
         room_id: `eq.${roomId}`,
         select: 'id',
       });
       if (roomShelves.length === 0) {
-        // No shelves in this room → no books possible
         res.json({ items: [], total: 0, page, limit });
         return;
       }

@@ -448,6 +448,7 @@ async function loadRooms() {
   );
   const shelvesArrays = await Promise.all(shelvesPromises);
   allShelves = shelvesArrays.flat();
+  populateFilters();
   renderRooms();
 }
 
@@ -496,11 +497,16 @@ function renderRooms() {
     .join('');
 }
 
-/** Navigate to books filtered by shelf. */
+/** Navigate to books filtered by a specific shelf. Clears all other filters first. */
 (window as any).viewShelfBooks = function (shelfId: number) {
+  ($('filter-genre') as HTMLSelectElement).value = '';
+  ($('filter-room') as HTMLSelectElement).value = '';
+  ($('filter-author') as HTMLSelectElement).value = '';
+  ($('book-search') as HTMLInputElement).value = '';
   ($('filter-shelf') as HTMLSelectElement).value = String(shelfId);
+  currentPage = 1;
+  showPendingBooks = false;
   switchView('books');
-  loadBooks();
 };
 
 /** Open the room create modal. */
