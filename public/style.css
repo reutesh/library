@@ -39,6 +39,14 @@ body {
   padding: 0 20px;
 }
 
+.view {
+  display: none;
+}
+
+.view.active {
+  display: block;
+}
+
 /* ── 2. Header & navigation ─────────────────────────────── */
 
 header {
