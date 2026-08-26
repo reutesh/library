@@ -17,16 +17,24 @@ const app = express();
 const PORT = process.env.PORT ?? 3000;
 
 // ── Middleware ───────────────────────────────────────────────
+app.disable('etag');
 app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// Serve the built client from /public
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// Serve the built client from /public (no cache for JS/CSS)
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders(res) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
+  },
+}));
 
 // ── API routes (no browser caching) ─────────────────────────
 app.use('/api', (_req, res, next) => {
-  res.set('Cache-Control', 'no-store');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   next();
 }, router);
 
