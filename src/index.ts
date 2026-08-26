@@ -24,8 +24,11 @@ app.use(cookieParser());
 // Serve the built client from /public
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// ── API routes ──────────────────────────────────────────────
-app.use('/api', router);
+// ── API routes (no browser caching) ─────────────────────────
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+}, router);
 
 // ── Catch-all → single-page app ─────────────────────────────
 app.get('{*path}', (_req, res) => {

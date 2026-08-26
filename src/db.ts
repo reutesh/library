@@ -158,7 +158,10 @@ export async function supaGet<T = any>(
       url.searchParams.set(k, v);
     }
   }
-  const res = await fetch(url.toString(), { headers: supaHeaders() });
+  const res = await fetch(url.toString(), {
+    headers: supaHeaders(),
+    cache: 'no-store',
+  });
   if (!res.ok) {
     const body = await res.text();
     err(`GET ${table} failed: ${res.status} ${body}`);
@@ -184,6 +187,7 @@ export async function supaGetWithCount<T = any>(
   }
   const res = await fetch(url.toString(), {
     headers: supaHeaders({ Prefer: 'count=exact' }),
+    cache: 'no-store',
   });
   if (!res.ok) {
     const body = await res.text();
@@ -191,7 +195,7 @@ export async function supaGetWithCount<T = any>(
   }
   const rows = (await res.json()) as T[];
   const range = res.headers.get('content-range') ?? '';
-  const total = parseInt(range.split('/')[1] || '0', 10);
+  const total = parseInt(range.split('/')[1] || '0', 10) || rows.length;
   return { rows, total };
 }
 
