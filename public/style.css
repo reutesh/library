@@ -348,7 +348,7 @@ nav {
   color: #333;
 }
 
-#book-form, #room-form, #shelf-form {
+#book-form, #room-form, #shelf-form, #user-form, #profile-form {
   padding: 1.5rem;
 }
 
