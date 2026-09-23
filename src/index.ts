@@ -7,11 +7,13 @@
  * response instead of leaking stack traces.
  */
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { router } from './routes';
+import { bootstrapAdmin } from './auth';
 
 const app = express();
 const PORT = process.env.PORT ?? 3000;
@@ -52,6 +54,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await bootstrapAdmin();
   console.log(`Library Manager listening on http://localhost:${PORT}`);
 });
