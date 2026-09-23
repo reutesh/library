@@ -24,8 +24,9 @@ app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 
-// Serve the built client from /public (no cache for JS/CSS)
-app.use(express.static(path.join(__dirname, '..', 'public'), {
+// ── Static client (Vite build → /dist) ───────────────────────
+const clientDir = path.join(__dirname, '..', 'dist');
+app.use(express.static(clientDir, {
   setHeaders(res) {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.set('Pragma', 'no-cache');
@@ -41,8 +42,15 @@ app.use('/api', (_req, res, next) => {
 }, router);
 
 // ── Catch-all → single-page app ─────────────────────────────
-app.get('{*path}', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+app.get('{*path}', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(clientDir, 'index.html'), (err) => {
+    if (err) {
+      res
+        .status(503)
+        .send('Client not built. Run `npm run build:ui` or use `npm run dev`.');
+    }
+  });
 });
 
 // ── Global error handler ────────────────────────────────────

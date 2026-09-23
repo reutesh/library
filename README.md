@@ -1,6 +1,6 @@
 # Library Manager
 
-A library management app for organizing books into rooms and shelves. Built with Express + Supabase.
+A library management app for organizing books into rooms and shelves. Built with React + Express + Supabase.
 
 ## Setup
 
@@ -32,10 +32,21 @@ ADMIN_PASSWORD=admin123
 
 ```bash
 npm install
-npm run dev
+npm install --prefix client
+npm run build
+npm start
 ```
 
 The app runs at [http://localhost:3000](http://localhost:3000)
+
+### Development
+
+Run the API and the UI in two terminals:
+
+```bash
+npm run dev          # Express API on http://localhost:3000
+npm run dev:client   # Vite UI on http://localhost:5173 (proxies /api to :3000)
+```
 
 ## Features
 
@@ -59,6 +70,6 @@ Books that are not placed on any shelf can only be edited/deleted by admins.
 
 ## Tech Stack
 
-- **Frontend:** Vanilla TypeScript (bundled with esbuild)
+- **Frontend:** React 19 + TypeScript (Vite, react-router, fetch + Context)
 - **Backend:** Express 5
 - **Database:** Supabase (PostgreSQL + PostgREST)

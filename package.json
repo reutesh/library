@@ -2,32 +2,40 @@
   "name": "library-manager",
   "version": "1.0.0",
   "description": "A library management app with rooms, shelves, and books — powered by Supabase",
-  "main": "dist/index.js",
+  "type": "commonjs",
   "scripts": {
-    "build:server": "tsc",
-    "build:client": "esbuild src/client/app.ts --bundle --outfile=public/app.js --target=es2020 --format=iife",
-    "build": "npm run build:server && npm run build:client",
-    "typecheck:client": "tsc -p tsconfig.client.json",
-    "start": "node dist/index.js",
-    "dev": "npm run build:client && tsx watch src/index.ts"
+    "dev": "concurrently -k -n api,ui -c blue,magenta \"npm:dev:api\" \"npm:dev:ui\"",
+    "dev:api": "tsx watch server/index.ts",
+    "dev:ui": "vite",
+    "build": "npm run build:server && npm run build:ui",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build:ui": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "start": "node server-dist/index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^16.4.7",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
-    "esbuild": "^0.28.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.0.0",
     "tsx": "^4.23.12",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^6.0.0"
   }
 }
