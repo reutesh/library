@@ -93,6 +93,23 @@ function $v(id: string): string {
   return (document.getElementById(id) as HTMLInputElement).value;
 }
 
+/** Show a centered spinner inside the given container while data loads. */
+function showLoading(container: HTMLElement, label = 'טוען...') {
+  container.innerHTML = `<div class="loading-state"><div class="spinner"></div>${label}</div>`;
+}
+
+/**
+ * Show a spinner only when the container has no rendered content yet.
+ * Once data has been rendered once, later refreshes keep the existing
+ * content visible (no flicker) instead of showing a spinner again.
+ * @returns  true when a spinner was shown (i.e. first load)
+ */
+function maybeShowLoading(container: HTMLElement, label = 'טוען...'): boolean {
+  if (container.dataset.loaded === 'true') return false;
+  showLoading(container, label);
+  return true;
+}
+
 /** Check if the user can edit room-related content. */
 function canEditRoomLocation(roomId: number | null): boolean {
   if (!me || !roomId) return false;
@@ -181,6 +198,12 @@ function initLoginForm() {
     const username = ($('login-username') as HTMLInputElement).value.trim();
     const password = ($('login-password') as HTMLInputElement).value;
     const errorEl = $('login-error');
+    const submitBtn = $('login-form').querySelector('button[type="submit"]') as HTMLButtonElement;
+    const originalLabel = submitBtn.textContent ?? 'התחברות';
+
+    errorEl.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'מתחבר...';
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -199,6 +222,9 @@ function initLoginForm() {
     } catch {
       errorEl.textContent = 'Network error';
       errorEl.style.display = 'block';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
     }
   });
 }
@@ -212,6 +238,10 @@ function initLogout() {
     allRooms = [];
     allShelves = [];
     allUsers = [];
+    for (const id of ['books-list', 'rooms-list', 'users-list', 'stats']) {
+      $(id).innerHTML = '';
+      delete $(id).dataset.loaded;
+    }
     showLogin();
   });
 }
@@ -240,15 +270,25 @@ async function loadBooks() {
   if (author) params.set('author', author);
   if (showPendingBooks) params.set('status', 'pending');
 
+let isInitial = false;
   try {
+    isInitial = maybeShowLoading($('books-list'));
+    if (isInitial) $('pagination-bar').style.display = 'none';
     const res = await fetch(`/api/books?${params}`);
     if (!res.ok) return;
     const data = await res.json();
     allBooks = data.items;
     totalBooks = data.total;
     renderBooks();
+    $('books-list').dataset.loaded = 'true';
+    $('pagination-bar').style.display = '';
     renderPaginationBar();
   } catch (err) {
+    if (isInitial) {
+      $('books-list').innerHTML =
+        '<div class="empty-state"><p>שגיאה בטעינת ספרים</p></div>';
+      $('pagination-bar').style.display = '';
+    }
     console.error('loadBooks', err);
   }
 }
@@ -432,6 +472,7 @@ async function saveBook() {
 
 /** Fetch rooms + shelves and render the rooms view. */
 async function loadRooms() {
+  maybeShowLoading($('rooms-list'));
   const [roomsRes, shelvesRes] = await Promise.all([
     fetch('/api/rooms'),
     fetch('/api/books?all=true'),
@@ -449,6 +490,7 @@ async function loadRooms() {
   const shelvesArrays = await Promise.all(shelvesPromises);
   allShelves = shelvesArrays.flat();
   populateFilters();
+  $('rooms-list').dataset.loaded = 'true';
   renderRooms();
 }
 
@@ -603,10 +645,12 @@ function initShelfModal() {
 
 /** Fetch and render the users table. */
 async function loadUsers() {
+  maybeShowLoading($('users-list'));
   const res = await fetch('/api/users');
   if (!res.ok) return;
   allUsers = await res.json();
   renderUsers();
+  $('users-list').dataset.loaded = 'true';
 }
 
 /** Render the admin users table. */
@@ -930,6 +974,7 @@ function initGenreAutocomplete() {
 
 /** Load dashboard stats (admin only). */
 async function loadDashboard() {
+  maybeShowLoading($('stats'), 'טוען נתונים...');
   const res = await fetch('/api/stats');
   if (!res.ok) return;
   const s = await res.json();
@@ -939,6 +984,9 @@ async function loadDashboard() {
     <div class="stat-card"><h3>${s.rooms}</h3><p>חדרים</p></div>
     <div class="stat-card"><h3>${s.users}</h3><p>משתמשים</p></div>
     <div class="stat-card"><h3>${s.pendingBooks}</h3><p>ספרים ממתינים</p></div>`;
+  $('unassigned-books').innerHTML =
+    '<div class="empty-state"><p>אין ספרים לא מוקצים</p></div>';
+  $('stats').dataset.loaded = 'true';
 }
 
 /** Initialize filter dropdown options from cached data. */
