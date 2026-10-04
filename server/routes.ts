@@ -853,7 +853,7 @@ router.get(
     const books = await supaGet<DbBook>('books', {
       select: 'genre',
       status: 'eq.approved',
-      'not.genre': 'is.null',
+      genre: 'not.is.null',
     });
     const genres = [...new Set(books.map((b) => b.genre).filter(Boolean))].sort();
     res.json(genres);
@@ -868,7 +868,7 @@ router.get(
     const books = await supaGet<DbBook>('books', {
       select: 'author',
       status: 'eq.approved',
-      'not.author': 'is.null',
+      author: 'not.is.null',
     });
     const authors = [...new Set(books.map((b) => b.author).filter(Boolean))].sort();
     res.json(authors);

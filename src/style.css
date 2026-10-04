@@ -40,14 +40,25 @@ body {
 }
 
 .view {
-  display: none;
-}
-
-.view.active {
   display: block;
 }
 
 /* ── 2. Header & navigation ─────────────────────────────── */
+
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 
 header {
   background: #2c3e50;
@@ -82,6 +93,8 @@ nav {
   cursor: pointer;
   font-size: 1rem;
   transition: all 0.2s;
+  text-decoration: none;
+  display: inline-block;
 }
 
 .nav-btn:hover {
