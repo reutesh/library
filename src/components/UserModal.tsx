@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import Modal from './Modal';
-import { api, type User } from '../api';
+import { api, type Role, type User, type UserInput } from '../api';
 import { useData } from '../data/DataContext';
 
 interface UserModalProps {
@@ -11,19 +11,12 @@ interface UserModalProps {
 
 export default function UserModal({ user, onClose, onSaved }: UserModalProps) {
   const { rooms } = useData();
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(user?.username ?? '');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('viewer');
-  const [allowedRoomIds, setAllowedRoomIds] = useState<number[]>([]);
+  const [role, setRole] = useState<Role>(user?.role ?? 'viewer');
+  const [allowedRoomIds, setAllowedRoomIds] = useState<number[]>(user?.allowedRoomIds ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!user) return;
-    setUsername(user.username);
-    setRole(user.role);
-    setAllowedRoomIds(user.allowedRoomIds);
-  }, [user]);
 
   const toggleRoom = (id: number) => {
     setAllowedRoomIds((prev) =>
@@ -35,7 +28,7 @@ export default function UserModal({ user, onClose, onSaved }: UserModalProps) {
     e.preventDefault();
     setError('');
     setBusy(true);
-    const data: Record<string, unknown> = {
+    const data: UserInput = {
       username,
       role,
       allowed_room_ids: allowedRoomIds,
@@ -45,7 +38,7 @@ export default function UserModal({ user, onClose, onSaved }: UserModalProps) {
       if (user) {
         await api.updateUser(user.id, data);
       } else {
-        await api.createUser({ ...data, password });
+        await api.createUser(data);
       }
       onSaved();
     } catch (err) {
@@ -83,7 +76,7 @@ export default function UserModal({ user, onClose, onSaved }: UserModalProps) {
         </div>
         <div className="form-group">
           <label htmlFor="user-role">תפקיד</label>
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <select id="user-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
             <option value="viewer">צופה — צפייה בלבד</option>
             <option value="editor">עורך — עריכה בחדרים מסוימים</option>
             <option value="admin">מנהל — גישה להכל</option>

@@ -16,6 +16,7 @@
  *  12. Login screen
  *  13. Header user box & role badges
  *  14. Responsive breakpoints
+ *  15. Book detail & loans
  */
 
 /* ── 1. Reset & base ────────────────────────────────────── */
@@ -28,15 +29,16 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Hebrew', sans-serif;
-  background: #f5f5f5;
-  color: #333;
+  background: #f3f6f8;
+  color: #263445;
   line-height: 1.6;
 }
 
 #app {
-  max-width: 1200px;
+  max-width: 1400px;
+  min-height: 100vh;
   margin: 0 auto;
-  padding: 0 20px;
+  padding: 0 28px;
 }
 
 .view {
@@ -61,51 +63,71 @@ body {
 }
 
 header {
-  background: #2c3e50;
+  background: linear-gradient(120deg, #203447, #2c5065);
   color: white;
-  padding: 1rem 2rem;
-  margin: 0 -20px 2rem;
+  padding: 1.25rem 2rem 0;
+  margin: 0 -28px 2rem;
+  border-radius: 0 0 18px 18px;
+  box-shadow: 0 8px 24px rgba(31, 52, 70, 0.14);
 }
 
 header h1 {
-  font-size: 1.8rem;
-  margin-bottom: 1rem;
+  font-size: 1.55rem;
+  margin: 0;
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  letter-spacing: -0.025em;
 }
 
 .header-row {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
+  align-items: center;
+  gap: 1.25rem;
 }
 
 nav {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .nav-btn {
   background: transparent;
-  border: 2px solid transparent;
-  color: #bdc3c7;
-  padding: 0.5rem 1rem;
-  border-radius: 5px;
+  border: 1px solid transparent;
+  color: #d2dce5;
+  padding: 0.55rem 1rem 0.7rem;
+  border-radius: 9px 9px 0 0;
   cursor: pointer;
-  font-size: 1rem;
-  transition: all 0.2s;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: color 0.18s, background-color 0.18s, border-color 0.18s;
   text-decoration: none;
   display: inline-block;
 }
 
 .nav-btn:hover {
   color: white;
-  border-color: #3498db;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .nav-btn.active {
-  color: white;
-  border-color: #3498db;
-  background: #3498db;
+  color: #203447;
+  background: #f3f6f8;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.page-content {
+  min-height: calc(100vh - 170px);
+  padding-bottom: 2.5rem;
+}
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid rgba(52, 152, 219, 0.55);
+  outline-offset: 2px;
 }
 
 /* ── 3. Buttons ─────────────────────────────────────────── */
@@ -196,10 +218,24 @@ nav {
   border-radius: 10px;
   box-shadow: 0 2px 5px rgba(0,0,0,0.1);
   transition: transform 0.2s;
+  cursor: pointer;
 }
 
 .book-card:hover {
   transform: translateY(-2px);
+}
+
+.book-card.on-loan {
+  outline: 2px solid #e67e22;
+  outline-offset: -2px;
+  box-shadow: 0 2px 8px rgba(230, 126, 34, 0.35);
+}
+
+.book-card .borrowed-to {
+  color: #e67e22;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
 }
 
 .book-card h4 {
@@ -297,6 +333,8 @@ nav {
   border-radius: 8px;
   border-left: none;
   border-right: 4px solid #3498db;
+  cursor: pointer;
+  transition: background 0.2s;
 }
 
 .shelf-card h4 {
@@ -315,12 +353,7 @@ nav {
   gap: 0.5rem;
 }
 
-.shelf-card[data-action="view-shelf"] {
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.shelf-card[data-action="view-shelf"]:hover {
+.shelf-card:hover {
   background: #eef3f7;
 }
 
@@ -343,7 +376,7 @@ nav {
 /* ── 7. Modal & forms ───────────────────────────────────── */
 
 .modal {
-  display: none;
+  display: flex;
   position: fixed;
   top: 0;
   left: 0;
@@ -353,10 +386,6 @@ nav {
   z-index: 1000;
   align-items: center;
   justify-content: center;
-}
-
-.modal.active {
-  display: flex;
 }
 
 .modal-content {
@@ -596,7 +625,6 @@ nav {
 }
 
 .suggestions-list {
-  display: none;
   position: absolute;
   top: 100%;
   left: 0;
@@ -628,17 +656,13 @@ nav {
 /* ── 12. Login screen ───────────────────────────────────── */
 
 #login-screen {
-  display: none;
+  display: flex;
   position: fixed;
   inset: 0;
   background: #2c3e50;
   z-index: 2000;
   align-items: center;
   justify-content: center;
-}
-
-#login-screen.active {
-  display: flex;
 }
 
 .login-card {
@@ -682,12 +706,37 @@ nav {
   font-weight: 500;
 }
 
+.user-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding-inline-end: 0.8rem;
+  border-inline-end: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.user-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-box .btn-secondary {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.user-box .btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .role-badge {
   display: inline-block;
   padding: 0.15rem 0.6rem;
   border-radius: 12px;
   font-size: 0.8rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .badge-admin { background: #3498db; color: white; }
@@ -702,6 +751,8 @@ nav {
 /* ── 14. Responsive breakpoints ─────────────────────────── */
 
 @media (max-width: 768px) {
+  #app { padding: 0 20px; }
+  header { margin-inline: -20px; padding-inline: 1.25rem; }
   header h1 { font-size: 1.4rem; }
   .book-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
   .shelves-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
@@ -709,9 +760,22 @@ nav {
 }
 
 @media (max-width: 600px) {
-  header { padding: 1rem; }
-  header h1 { font-size: 1.3rem; }
-  nav { flex-wrap: wrap; }
+  #app { padding: 0 14px; }
+  header {
+    margin-inline: -14px;
+    padding: 1rem 0.85rem 0;
+    border-radius: 0 0 14px 14px;
+  }
+  header h1 { font-size: 1.25rem; }
+  .header-row { align-items: flex-start; }
+  .app-nav {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    gap: 0.2rem;
+    margin-inline: -0.25rem;
+    scrollbar-width: thin;
+  }
+  .nav-btn { flex: 0 0 auto; padding: 0.55rem 0.75rem 0.65rem; font-size: 0.88rem; }
   .view-header { flex-direction: column; align-items: stretch; }
   .actions { flex-direction: column; }
   #book-search { width: 100%; }
@@ -719,7 +783,129 @@ nav {
   .filter-bar select { width: 100%; }
   .form-row { grid-template-columns: 1fr; }
   .room-header { flex-direction: column; gap: 0.5rem; align-items: stretch; }
-  .header-row { flex-direction: column; }
-  .user-box { align-self: flex-end; }
+  .header-row { flex-direction: column; gap: 0.75rem; }
+  .user-box { align-self: stretch; flex-wrap: wrap; justify-content: flex-start; }
+  .user-identity { margin-inline-end: auto; }
+  .user-name { max-width: 130px; }
+  .page-content { min-height: calc(100vh - 210px); }
   .pagination-bar { flex-direction: column; align-items: center; }
+  .lend-form { flex-direction: column; }
+}
+
+/* ── 15. Book detail & loans ────────────────────────────── */
+
+#book-detail {
+  padding: 1.5rem;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.detail-header h4 {
+  font-size: 1.2rem;
+  color: #2c3e50;
+}
+
+.detail-edit {
+  margin-inline-start: auto;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.95rem;
+}
+
+.detail-row .label {
+  color: #777;
+}
+
+.detail-row .value {
+  color: #333;
+  text-align: left;
+}
+
+.tag.tag-onloan {
+  background: #e67e22;
+  color: white;
+}
+
+.tag.tag-available {
+  background: #27ae60;
+  color: white;
+}
+
+.loan-current {
+  background: #fdf2e9;
+  border: 1px solid #e67e22;
+  color: #a04000;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  margin-top: 0.9rem;
+  font-size: 0.9rem;
+}
+
+.loan-section {
+  margin-top: 1.25rem;
+}
+
+.loan-section h4 {
+  font-size: 1rem;
+  color: #2c3e50;
+  margin-bottom: 0.6rem;
+}
+
+.lend-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lend-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 0.95rem;
+}
+
+.lend-form input:focus {
+  outline: none;
+  border-color: #3498db;
+}
+
+.loan-history {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.loan-history li {
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+}
+
+.loan-history .loan-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 0.15rem;
+}
+
+.loan-history .loan-dates {
+  color: #777;
+  font-size: 0.8rem;
 }

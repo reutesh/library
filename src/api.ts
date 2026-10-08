@@ -1,15 +1,17 @@
 /*
- * client/src/api.ts — API client and shared types
+ * src/api.ts — API client and shared types
  *
- * Thin fetch wrappers around the Express REST API.  Every call points at
+ * Thin fetch wrappers around the Express REST API. Every call points at
  * `/api/...`, which Vite proxies to the backend in dev and is served by
- * Express in production.  Errors throw an Error with the server's message.
+ * Express in production. Errors throw an Error with the server's message.
  */
+
+export type Role = 'admin' | 'editor' | 'viewer';
 
 export interface Me {
   id: number;
   username: string;
-  role: 'admin' | 'editor' | 'viewer';
+  role: Role;
   allowedRoomIds: number[];
 }
 
@@ -40,13 +42,29 @@ export interface Book {
   status: 'approved' | 'pending';
   createdBy: number | null;
   updatedAt: string;
+  onLoan: boolean;
+  borrowerName: string | null;
 }
 
-export interface User {
+export interface Loan {
   id: number;
+  bookId: number;
+  borrowerName: string;
+  lentBy: number | null;
+  lentByName: string | null;
+  returnedBy: number | null;
+  returnedByName: string | null;
+  lentAt: string;
+  returnedAt: string | null;
+}
+
+export type User = Me;
+
+export interface UserInput {
   username: string;
-  role: string;
-  allowedRoomIds: number[];
+  password?: string;
+  role: Role;
+  allowed_room_ids: number[];
 }
 
 export interface BookPage {
@@ -79,7 +97,6 @@ interface ErrBody {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
-    cache: 'no-store',
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) },
   });
@@ -93,7 +110,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
     throw new Error(message);
   }
-  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -144,6 +160,20 @@ export const api = {
     return request<string[]>('/authors');
   },
 
+  // ── Loans (lending) ───────────────────────────────────
+  bookLoans(bookId: number) {
+    return request<Loan[]>(`/books/${bookId}/loans`);
+  },
+  lendBook(bookId: number, borrower_name: string) {
+    return request<Loan>(`/books/${bookId}/loans`, {
+      method: 'POST',
+      body: JSON.stringify({ borrower_name }),
+    });
+  },
+  returnLoan(loanId: number) {
+    return request<Loan>(`/loans/${loanId}/return`, { method: 'POST' });
+  },
+
   // ── Rooms & shelves ───────────────────────────────────
   rooms() {
     return request<Room[]>('/rooms');
@@ -154,8 +184,8 @@ export const api = {
   deleteRoom(id: number) {
     return request<{ ok: boolean }>(`/rooms/${id}`, { method: 'DELETE' });
   },
-  shelves(roomId: number) {
-    return request<Shelf[]>(`/rooms/${roomId}/shelves`);
+  shelves() {
+    return request<Shelf[]>('/shelves');
   },
   createShelf(roomId: number, name: string) {
     return request<Shelf>(`/rooms/${roomId}/shelves`, {
@@ -171,10 +201,10 @@ export const api = {
   users() {
     return request<User[]>('/users');
   },
-  createUser(data: Record<string, unknown>) {
+  createUser(data: UserInput) {
     return request<User>('/users', { method: 'POST', body: JSON.stringify(data) });
   },
-  updateUser(id: number, data: Record<string, unknown>) {
+  updateUser(id: number, data: UserInput) {
     return request<User>(`/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),

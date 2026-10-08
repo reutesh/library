@@ -21,7 +21,7 @@ export default function Login() {
   };
 
   return (
-    <div id="login-screen" className="active">
+    <div id="login-screen">
       <form className="login-card" onSubmit={submit}>
         <h1>📚 מנהל ספרייה</h1>
         <p className="login-subtitle">התחברות למערכת</p>

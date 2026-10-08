@@ -8,7 +8,7 @@ interface ModalProps {
 
 export default function Modal({ title, onClose, children }: ModalProps) {
   return (
-    <div className="modal active" onClick={onClose}>
+    <div className="modal" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>

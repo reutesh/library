@@ -1,9 +1,9 @@
 /*
- * client/src/auth/AuthContext.tsx — authentication state
+ * src/auth/AuthContext.tsx — authentication state
  *
  * Restores the session from the httpOnly cookie on mount and exposes
- * login / logout.  The whole app shows the login screen until `me`
- * is known or the restore attempt finishes.
+ * login / logout. The app shows a loading screen until the restore
+ * attempt finishes, then either the login screen or the app.
  */
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
@@ -15,7 +15,8 @@ interface AuthContextValue {
   loading: boolean;
   login(username: string, password: string): Promise<void>;
   logout(): Promise<void>;
-  setMe(me: Me | null): void;
+  /** Re-fetch the current user (e.g. after their room access changed). */
+  reloadMe(): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -46,13 +47,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMe(user);
   };
 
+  const reloadMe = async () => {
+    setMe(await api.me());
+  };
+
   const logout = async () => {
     await api.logout();
     setMe(null);
   };
 
   return (
-    <AuthContext.Provider value={{ me, loading, login, logout, setMe }}>
+    <AuthContext.Provider value={{ me, loading, login, logout, reloadMe }}>
       {children}
     </AuthContext.Provider>
   );

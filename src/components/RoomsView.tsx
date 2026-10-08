@@ -3,27 +3,25 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { useData } from '../data/DataContext';
+import { canEditRoom } from '../roles';
 import Loading from './Loading';
 import RoomModal from './RoomModal';
 import ShelfModal from './ShelfModal';
 
 export default function RoomsView() {
-  const { me } = useAuth();
-  const { rooms, shelves, refreshRooms, referenceLoaded } = useData();
+  const { me, reloadMe } = useAuth();
+  const { rooms, shelves, refresh, referenceLoaded } = useData();
   const navigate = useNavigate();
   const [roomModal, setRoomModal] = useState(false);
   const [shelfRoomId, setShelfRoomId] = useState<number | null>(null);
-
-  const canEditRoom = (roomId: number) =>
-    me?.role === 'admin' || (me?.role === 'editor' && me.allowedRoomIds.includes(roomId));
 
   const deleteRoom = async (id: number) => {
     if (!confirm('בטוח למחוק חדר זה?')) return;
     try {
       await api.deleteRoom(id);
-      await refreshRooms();
+      await refresh();
     } catch (err) {
-      console.error('deleteRoom', err);
+      alert(err instanceof Error ? err.message : 'שגיאה במחיקה');
     }
   };
 
@@ -31,25 +29,27 @@ export default function RoomsView() {
     if (!confirm('בטוח למחוק מדף זה?')) return;
     try {
       await api.deleteShelf(id);
-      await refreshRooms();
+      await refresh();
     } catch (err) {
-      console.error('deleteShelf', err);
+      alert(err instanceof Error ? err.message : 'שגיאה במחיקה');
     }
   };
 
   const afterSave = async () => {
     setRoomModal(false);
     setShelfRoomId(null);
-    await refreshRooms();
+    await refresh();
   };
 
   return (
     <section className="view">
       <div className="view-header">
         <h2>חדרים ומדפים</h2>
-        <button className="btn btn-primary" onClick={() => setRoomModal(true)}>
-          + הוסף חדר
-        </button>
+        {me?.role !== 'viewer' && (
+          <button className="btn btn-primary" onClick={() => setRoomModal(true)}>
+            + הוסף חדר
+          </button>
+        )}
       </div>
 
       {rooms.length === 0 && !referenceLoaded ? (
@@ -67,12 +67,14 @@ export default function RoomsView() {
                 <h3>{room.name}</h3>
                 <span className="book-count">{room.bookCount} ספרים</span>
                 <div className="room-actions">
-                  <button
-                    className="btn btn-primary btn-small"
-                    onClick={() => setShelfRoomId(room.id)}
-                  >
-                    + מדף
-                  </button>
+                  {canEditRoom(me, room.id) && (
+                    <button
+                      className="btn btn-primary btn-small"
+                      onClick={() => setShelfRoomId(room.id)}
+                    >
+                      + מדף
+                    </button>
+                  )}
                   {me?.role === 'admin' && (
                     <button
                       className="btn btn-danger btn-small"
@@ -91,12 +93,11 @@ export default function RoomsView() {
                       <div
                         className="shelf-card"
                         key={shelf.id}
-                        data-action="view-shelf"
                         onClick={() => navigate(`/books?shelf=${shelf.id}`)}
                       >
                         <h4>{shelf.name}</h4>
                         <div className="book-count">{shelf.bookCount} ספרים</div>
-                        {canEditRoom(room.id) && (
+                        {canEditRoom(me, room.id) && (
                           <div className="actions">
                             <button
                               className="btn btn-danger btn-small"
@@ -111,12 +112,14 @@ export default function RoomsView() {
                         )}
                       </div>
                     ))}
-                  <div
-                    className="add-shelf-btn"
-                    onClick={() => setShelfRoomId(room.id)}
-                  >
-                    + הוסף מדף
-                  </div>
+                  {canEditRoom(me, room.id) && (
+                    <div
+                      className="add-shelf-btn"
+                      onClick={() => setShelfRoomId(room.id)}
+                    >
+                      + הוסף מדף
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -124,7 +127,16 @@ export default function RoomsView() {
         </div>
       )}
 
-      {roomModal && <RoomModal onClose={() => setRoomModal(false)} onSaved={afterSave} />}
+      {roomModal && (
+        <RoomModal
+          onClose={() => setRoomModal(false)}
+          onSaved={async () => {
+            await afterSave();
+            // Editors are granted access to rooms they create
+            if (me?.role === 'editor') await reloadMe();
+          }}
+        />
+      )}
       {shelfRoomId !== null && (
         <ShelfModal
           roomId={shelfRoomId}
