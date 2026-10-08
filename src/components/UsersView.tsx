@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
 import { api, type User } from '../api';
+import { useAuth } from '../auth/AuthContext';
 import { useData } from '../data/DataContext';
+import { roleLabels } from '../roles';
 import Loading from './Loading';
 import UserModal from './UserModal';
 
-const roleLabels: Record<string, string> = {
-  admin: 'מנהל',
-  editor: 'עורך',
-  viewer: 'צופה',
-};
-
 export default function UsersView() {
+  const { me } = useAuth();
   const { rooms } = useData();
   const [users, setUsers] = useState<User[] | null>(null);
   const [editing, setEditing] = useState<User | 'new' | null>(null);
@@ -29,8 +26,12 @@ export default function UsersView() {
 
   const deleteUser = async (id: number) => {
     if (!confirm('בטוח למחוק משתמש זה?')) return;
-    await api.deleteUser(id);
-    load();
+    try {
+      await api.deleteUser(id);
+      load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'שגיאה במחיקה');
+    }
   };
 
   const roomNames = (ids: number[]) =>
@@ -68,15 +69,17 @@ export default function UsersView() {
             {users.map((u) => (
               <tr key={u.id}>
                 <td>{u.username}</td>
-                <td>{roleLabels[u.role] ?? u.role}</td>
+                <td>{roleLabels[u.role]}</td>
                 <td>{roomNames(u.allowedRoomIds) || '—'}</td>
                 <td className="row-actions">
                   <button className="btn btn-primary btn-small" onClick={() => setEditing(u)}>
                     עריכה
                   </button>
-                  <button className="btn btn-danger btn-small" onClick={() => deleteUser(u.id)}>
-                    מחיקה
-                  </button>
+                  {u.id !== me?.id && (
+                    <button className="btn btn-danger btn-small" onClick={() => deleteUser(u.id)}>
+                      מחיקה
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

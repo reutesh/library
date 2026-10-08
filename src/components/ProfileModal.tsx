@@ -3,18 +3,15 @@ import Modal from './Modal';
 import { api } from '../api';
 
 interface ProfileModalProps {
-  open: boolean;
   onClose: () => void;
 }
 
-export default function ProfileModal({ open, onClose }: ProfileModalProps) {
+export default function ProfileModal({ onClose }: ProfileModalProps) {
   const [current, setCurrent] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  if (!open) return null;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -26,9 +23,6 @@ export default function ProfileModal({ open, onClose }: ProfileModalProps) {
     setBusy(true);
     try {
       await api.changePassword(current, newPw);
-      setCurrent('');
-      setNewPw('');
-      setConfirm('');
       onClose();
       alert('הסיסמה שונתה בהצלחה');
     } catch (err) {

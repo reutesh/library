@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import Modal from './Modal';
-import Loading from './Loading';
 import { api, type Book, type BookInput } from '../api';
 import { useData } from '../data/DataContext';
 
@@ -13,38 +12,15 @@ interface BookModalProps {
 export default function BookModal({ book, onClose, onSaved }: BookModalProps) {
   const { rooms, shelves, genres } = useData();
   const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(book !== null);
   const [error, setError] = useState('');
 
-  const [title, setTitle] = useState('');
-  const [author, setAuthor] = useState('');
-  const [isbn, setIsbn] = useState('');
-  const [genre, setGenre] = useState('');
-  const [notes, setNotes] = useState('');
-  const [shelfId, setShelfId] = useState('');
+  const [title, setTitle] = useState(book?.title ?? '');
+  const [author, setAuthor] = useState(book?.author ?? '');
+  const [isbn, setIsbn] = useState(book?.isbn ?? '');
+  const [genre, setGenre] = useState(book?.genre ?? '');
+  const [notes, setNotes] = useState(book?.notes ?? '');
+  const [shelfId, setShelfId] = useState(book?.shelfId ? String(book.shelfId) : '');
   const [showSuggestions, setShowSuggestions] = useState(false);
-
-  useEffect(() => {
-    if (!book) return;
-    let cancelled = false;
-    api
-      .book(book.id)
-      .then((b) => {
-        if (cancelled) return;
-        setTitle(b.title);
-        setAuthor(b.author ?? '');
-        setIsbn(b.isbn ?? '');
-        setGenre(b.genre ?? '');
-        setNotes(b.notes ?? '');
-        setShelfId(b.shelfId ? String(b.shelfId) : '');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [book]);
 
   const suggestions = useMemo(() => {
     const val = genre.trim().toLowerCase();
@@ -54,10 +30,6 @@ export default function BookModal({ book, onClose, onSaved }: BookModalProps) {
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) {
-      alert('כותרת חובה');
-      return;
-    }
     setError('');
     setBusy(true);
     const data: BookInput = {
@@ -84,108 +56,104 @@ export default function BookModal({ book, onClose, onSaved }: BookModalProps) {
 
   return (
     <Modal title={book ? 'ערוך ספר' : 'הוסף ספר'} onClose={onClose}>
-      {loading ? (
-        <Loading />
-      ) : (
-        <form id="book-form" onSubmit={save}>
+      <form id="book-form" onSubmit={save}>
+        <div className="form-group">
+          <label htmlFor="book-title">כותרת *</label>
+          <input
+            id="book-title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="book-author">מחבר/ת</label>
+          <input
+            id="book-author"
+            value={author}
+            onChange={(e) => setAuthor(e.target.value)}
+          />
+        </div>
+        <div className="form-row">
           <div className="form-group">
-            <label htmlFor="book-title">כותרת *</label>
+            <label htmlFor="book-isbn">ISBN</label>
             <input
-              id="book-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
+              id="book-isbn"
+              value={isbn}
+              onChange={(e) => setIsbn(e.target.value)}
             />
           </div>
-          <div className="form-group">
-            <label htmlFor="book-author">מחבר/ת</label>
+          <div className="form-group autocomplete-wrapper">
+            <label htmlFor="book-genre">ז'אנר</label>
             <input
-              id="book-author"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
+              id="book-genre"
+              value={genre}
+              onChange={(e) => {
+                setGenre(e.target.value);
+                setShowSuggestions(true);
+              }}
+              onFocus={() => setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+              autoComplete="off"
             />
+            {showSuggestions && suggestions.length > 0 && (
+              <ul className="suggestions-list">
+                {suggestions.map((g) => (
+                  <li
+                    key={g}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setGenre(g);
+                      setShowSuggestions(false);
+                    }}
+                  >
+                    {g}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="book-isbn">ISBN</label>
-              <input
-                id="book-isbn"
-                value={isbn}
-                onChange={(e) => setIsbn(e.target.value)}
-              />
-            </div>
-            <div className="form-group autocomplete-wrapper">
-              <label htmlFor="book-genre">ז'אנר</label>
-              <input
-                id="book-genre"
-                value={genre}
-                onChange={(e) => {
-                  setGenre(e.target.value);
-                  setShowSuggestions(true);
-                }}
-                onFocus={() => setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                autoComplete="off"
-              />
-              {showSuggestions && suggestions.length > 0 && (
-                <ul className="suggestions-list" style={{ display: 'block' }}>
-                  {suggestions.map((g) => (
-                    <li
-                      key={g}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setGenre(g);
-                        setShowSuggestions(false);
-                      }}
-                    >
-                      {g}
-                    </li>
+        </div>
+        <div className="form-group">
+          <label htmlFor="book-shelf">מיקום</label>
+          <select
+            id="book-shelf"
+            value={shelfId}
+            onChange={(e) => setShelfId(e.target.value)}
+          >
+            <option value="">לא מוקצה</option>
+            {rooms.map((room) => (
+              <optgroup key={room.id} label={room.name}>
+                {shelves
+                  .filter((s) => s.roomId === room.id)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
                   ))}
-                </ul>
-              )}
-            </div>
-          </div>
-          <div className="form-group">
-            <label htmlFor="book-shelf">מיקום</label>
-            <select
-              id="book-shelf"
-              value={shelfId}
-              onChange={(e) => setShelfId(e.target.value)}
-            >
-              <option value="">לא מוקצה</option>
-              {rooms.map((room) => (
-                <optgroup key={room.id} label={room.name}>
-                  {shelves
-                    .filter((s) => s.roomId === room.id)
-                    .map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <div className="form-group">
-            <label htmlFor="book-notes">הערות</label>
-            <textarea
-              id="book-notes"
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
-          {error && <div className="login-error">{error}</div>}
-          <div className="form-actions">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              ביטול
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy ? 'שומר...' : 'שמירה'}
-            </button>
-          </div>
-        </form>
-      )}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        <div className="form-group">
+          <label htmlFor="book-notes">הערות</label>
+          <textarea
+            id="book-notes"
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </div>
+        {error && <div className="login-error">{error}</div>}
+        <div className="form-actions">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            ביטול
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            {busy ? 'שומר...' : 'שמירה'}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

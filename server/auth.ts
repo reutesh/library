@@ -1,5 +1,5 @@
 /*
- * src/auth.ts — Authentication & session management
+ * server/auth.ts — Authentication & session management
  *
  * Zero-dependency auth stack:
  *   1. Passwords are hashed with Node's built-in scrypt (salt:hex_digest).
@@ -14,19 +14,11 @@ import { supaGet, supaPost, type DbUser } from './db';
 
 // ── Password hashing ────────────────────────────────────────
 
-/** Random 16-byte hex salt. */
-function generateSalt(): string {
-  return crypto.randomBytes(16).toString('hex');
-}
-
-/**
- * Derive a scrypt hash from a plaintext password.
- * Returns `salt:hex_digest`.
- */
-function deriveHash(password: string, salt?: string): string {
-  const s = salt ?? generateSalt();
-  const hash = crypto.scryptSync(password, s, 64).toString('hex');
-  return `${s}:${hash}`;
+/** Hash a plaintext password with a random salt. Returns `salt:hex_digest`. */
+export function deriveHash(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
 }
 
 /**
@@ -42,7 +34,7 @@ export function verifyPassword(plaintext: string, stored: string): boolean {
 // ── Session signing ─────────────────────────────────────────
 
 const SESSION_SECRET = process.env.SESSION_SECRET!;
-const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface SessionPayload {
   userId: number;
@@ -107,18 +99,30 @@ const rateLimitMap = new Map<string, RateEntry>();
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const RATE_LIMIT_MAX = 10;
 
-/**
- * Returns true if the IP has exceeded the login failure limit.
- * Automatically resets after the window expires.
- */
+/** Returns true if the IP has used up its failed-login budget for the current window. */
 export function isRateLimited(ip: string): boolean {
+  const entry = rateLimitMap.get(ip);
+  if (!entry) return false;
+  if (Date.now() - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.delete(ip);
+    return false;
+  }
+  return entry.count >= RATE_LIMIT_MAX;
+}
+
+/** Records a failed login attempt for the IP. */
+export function recordLoginFailure(ip: string): void {
   const entry = rateLimitMap.get(ip);
   if (!entry || Date.now() - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
     rateLimitMap.set(ip, { count: 1, windowStart: Date.now() });
-    return false;
+  } else {
+    entry.count++;
   }
-  entry.count++;
-  return entry.count > RATE_LIMIT_MAX;
+}
+
+/** Clears the failure count after a successful login. */
+export function clearLoginFailures(ip: string): void {
+  rateLimitMap.delete(ip);
 }
 
 // ── Bootstrap admin ─────────────────────────────────────────
@@ -144,7 +148,3 @@ export async function bootstrapAdmin(): Promise<void> {
 
   console.log(`[auth] Bootstrap admin created: ${username}`);
 }
-
-// ── Password hash export (used by routes to create new users) ──
-
-export { deriveHash };

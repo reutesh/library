@@ -2,47 +2,41 @@ import { useEffect, useState } from 'react';
 import { api, type Stats } from '../api';
 import Loading from './Loading';
 
+const STAT_LABELS: [keyof Stats, string][] = [
+  ['books', 'ספרים'],
+  ['shelves', 'מדפים'],
+  ['rooms', 'חדרים'],
+  ['users', 'משתמשים'],
+  ['pendingBooks', 'ספרים ממתינים'],
+];
+
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    api.stats().then(setStats).catch(() => setStats(null));
+    api
+      .stats()
+      .then(setStats)
+      .catch((err) => setError(err instanceof Error ? err.message : 'שגיאה בטעינה'));
   }, []);
 
   return (
     <section className="view">
       <h2>לוח בקרה</h2>
-      {stats === null ? (
+      {error ? (
+        <div className="login-error">{error}</div>
+      ) : stats === null ? (
         <Loading label="טוען נתונים..." />
       ) : (
-        <>
-          <div className="stats-grid">
-            <div className="stat-card">
-              <h3>{stats.books}</h3>
-              <p>ספרים</p>
+        <div className="stats-grid">
+          {STAT_LABELS.map(([key, label]) => (
+            <div className="stat-card" key={key}>
+              <h3>{stats[key]}</h3>
+              <p>{label}</p>
             </div>
-            <div className="stat-card">
-              <h3>{stats.shelves}</h3>
-              <p>מדפים</p>
-            </div>
-            <div className="stat-card">
-              <h3>{stats.rooms}</h3>
-              <p>חדרים</p>
-            </div>
-            <div className="stat-card">
-              <h3>{stats.users}</h3>
-              <p>משתמשים</p>
-            </div>
-            <div className="stat-card">
-              <h3>{stats.pendingBooks}</h3>
-              <p>ספרים ממתינים</p>
-            </div>
-          </div>
-          <h3>ספרים לא מוקצים</h3>
-          <div className="empty-state">
-            <p>אין ספרים לא מוקצים</p>
-          </div>
-        </>
+          ))}
+        </div>
       )}
     </section>
   );

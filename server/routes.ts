@@ -1,5 +1,5 @@
 /*
- * src/routes.ts — API route definitions
+ * server/routes.ts — API route definitions
  *
  * Sections (look for the `═══` dividers):
  *   1. Helpers & middleware
@@ -9,39 +9,47 @@
  *   5. Shelves CRUD
  *   6. Books CRUD (with pending-book workflow)
  *   7. Genre / author / stats endpoints
+ *   8. Loans (lending / returning)
  *
  * Permission model:
  *   admin  — full access
  *   editor — allowed only in rooms listed in allowed_room_ids
  *   viewer — read-only (except can create "pending" books)
+ *            lending/returning is admin + editor only
+ *
+ * Express 5 forwards errors thrown by async handlers to the global
+ * error handler in index.ts, so handlers don't need their own try/catch.
  */
 
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   supaGet,
   supaGetWithCount,
+  supaCount,
   supaPost,
   supaUpdate,
   supaDelete,
   toRoom,
   toShelf,
   toBook,
+  toUser,
+  toLoan,
   type DbRoom,
   type DbShelf,
   type DbBook,
   type DbUser,
-  type RoomResponse,
-  type ShelfResponse,
+  type DbLoan,
   type BookResponse,
-  type UserResponse,
 } from './db';
 import {
   signSession,
   verifySession,
   verifyPassword,
   isRateLimited,
+  recordLoginFailure,
+  clearLoginFailures,
   deriveHash,
-  type SessionPayload,
+  SESSION_MAX_AGE_MS,
 } from './auth';
 
 export const router = Router();
@@ -50,95 +58,157 @@ export const router = Router();
 // 1. Helpers & middleware
 // ════════════════════════════════════════════════════════════
 
-/** Attach session payload to every request that passes through auth. */
 declare global {
   namespace Express {
     interface Request {
-      session?: SessionPayload;
+      /** The logged-in user, set by `requireAuth`. */
+      user?: DbUser;
     }
   }
 }
 
+const ROLES = ['admin', 'editor', 'viewer'] as const;
+const MIN_PASSWORD_LENGTH = 6;
+
 /**
- * Auth middleware — reads the `session` cookie, verifies the HMAC,
- * and attaches the decoded payload to `req.session`.
- * Responds 401 if the cookie is missing or invalid.
+ * Auth middleware — verifies the `session` cookie and loads the user
+ * into `req.user`. Responds 401 if the cookie is invalid or the user
+ * no longer exists.
  */
-function requireAuth(req: Request, res: Response, next: Function) {
-  const payload = verifySession(req.cookies.session);
-  if (!payload) {
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const session = verifySession(req.cookies.session);
+  const rows = session
+    ? await supaGet<DbUser>('app_users', { id: `eq.${session.userId}` })
+    : [];
+  if (rows.length === 0) {
     res.status(401).json({ error: 'Not authenticated' });
     return;
   }
-  req.session = payload;
+  req.user = rows[0];
   next();
 }
 
-/** Shorthand: returns the authenticated user row or sends 501. */
-async function getUserOrDie(res: Response, userId: number): Promise<DbUser | null> {
-  const rows = await supaGet<DbUser>('app_users', {
-    id: `eq.${userId}`,
-    select: '*',
-  });
-  if (rows.length === 0) {
-    res.status(501).json({ error: 'User not found' });
-    return null;
+/** Must run after `requireAuth`. */
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.user!.role !== 'admin') {
+    res.status(403).json({ error: 'Admin only' });
+    return;
   }
-  return rows[0];
+  next();
 }
 
-/**
- * Wraps an async route handler so thrown errors are caught and
- * returned as JSON instead of crashing the process.
- */
-function safeError(fn: (req: Request, res: Response) => Promise<void>) {
-  return (req: Request, res: Response) => {
-    fn(req, res).catch((err) => {
-      console.error('[route error]', err);
-      res.status(500).json({ error: 'Internal server error' });
-    });
-  };
-}
-
-/**
- * Returns the shelf's room_id, or null if the shelf doesn't exist.
- */
-async function getShelfRoomId(shelfId: number): Promise<number | null> {
+/** Returns the shelf's room_id, or null if the shelf doesn't exist. */
+async function getShelfRoomId(shelfId: number | null): Promise<number | null> {
   if (!shelfId) return null;
-  const rows = await supaGet<DbShelf>('shelves', {
-    id: `eq.${shelfId}`,
-    select: 'room_id',
-  });
-  return rows.length > 0 ? rows[0].room_id : null;
+  const rows = await supaGet<DbShelf>('shelves', { id: `eq.${shelfId}`, select: 'room_id' });
+  return rows[0]?.room_id ?? null;
 }
 
-/**
- * Permission check: can this user edit in the given room?
- *   - Admins always can.
- *   - Editors can if the room is in their allowed_room_ids.
- */
+/** Admins can edit any room; editors only rooms in their allowed_room_ids. */
 function canEditRoomLocation(user: DbUser, roomId: number | null): boolean {
   if (user.role === 'admin') return true;
   if (user.role !== 'editor' || !roomId) return false;
   return user.allowed_room_ids.includes(roomId);
 }
 
+/** Approved books are public; pending books only to admins and their creator. */
+function canSeeBook(user: DbUser, book: DbBook): boolean {
+  return book.status === 'approved' || user.role === 'admin' || book.created_by === user.id;
+}
+
 /**
- * Permission check: can this user edit a specific book?
- *   - Admins always can.
- *   - Editors can edit books in rooms they have access to.
- *   - Viewers can edit their own pending books.
+ * Who may edit / delete a book:
+ *   - Admins always.
+ *   - Anyone, for their own pending books.
+ *   - Editors, for books in rooms they have access to.
  */
-function canEditBook(
-  user: DbUser,
-  book: DbBook,
-  bookRoomId: number | null,
-): boolean {
+function canEditBook(user: DbUser, book: DbBook, bookRoomId: number | null): boolean {
   if (user.role === 'admin') return true;
-  if (user.role === 'editor') return canEditRoomLocation(user, bookRoomId);
-  // Viewer: can edit own pending books
   if (book.status === 'pending' && book.created_by === user.id) return true;
-  return false;
+  return user.role === 'editor' && canEditRoomLocation(user, bookRoomId);
+}
+
+/** Admins and editors can lend / return books. */
+function canLend(user: DbUser): boolean {
+  return user.role === 'admin' || user.role === 'editor';
+}
+
+/** Loads a book by id, or sends 404 and returns null. */
+async function findBookOr404(res: Response, id: number): Promise<DbBook | null> {
+  const rows = await supaGet<DbBook>('books', { id: `eq.${id}` });
+  if (rows.length === 0) {
+    res.status(404).json({ error: 'Book not found' });
+    return null;
+  }
+  return rows[0];
+}
+
+/** Returns a book_id → active (not yet returned) loan map for the given books. */
+async function getActiveLoanMap(bookIds: number[]): Promise<Map<number, DbLoan>> {
+  if (bookIds.length === 0) return new Map();
+  const rows = await supaGet<DbLoan>('loans', {
+    book_id: `in.(${bookIds.join(',')})`,
+    returned_at: 'is.null',
+  });
+  return new Map(rows.map((loan) => [loan.book_id, loan]));
+}
+
+/** Resolves user IDs → usernames (for loan history display). */
+async function getUserNameMap(ids: number[]): Promise<Map<number, string>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  const rows = await supaGet<DbUser>('app_users', {
+    id: `in.(${unique.join(',')})`,
+    select: 'id,username',
+  });
+  return new Map(rows.map((u) => [u.id, u.username]));
+}
+
+/** Adds shelf / room names and loan status to raw book rows. */
+async function enrichBooks(books: DbBook[]): Promise<BookResponse[]> {
+  const shelfIds = [...new Set(books.map((b) => b.shelf_id).filter((id): id is number => id != null))];
+  const [shelves, loans] = await Promise.all([
+    shelfIds.length > 0
+      ? supaGet<DbShelf>('shelves', { id: `in.(${shelfIds.join(',')})` })
+      : Promise.resolve([] as DbShelf[]),
+    getActiveLoanMap(books.map((b) => b.id)),
+  ]);
+  const shelfMap = new Map(shelves.map((s) => [s.id, s]));
+
+  const roomIds = [...new Set(shelves.map((s) => s.room_id))];
+  const rooms = roomIds.length > 0
+    ? await supaGet<DbRoom>('rooms', { id: `in.(${roomIds.join(',')})` })
+    : [];
+  const roomNames = new Map(rooms.map((r) => [r.id, r.name]));
+
+  return books.map((b) => {
+    const shelf = b.shelf_id != null ? shelfMap.get(b.shelf_id) : undefined;
+    const loan = loans.get(b.id);
+    return toBook(
+      b,
+      shelf?.name ?? null,
+      shelf?.room_id ?? null,
+      shelf ? (roomNames.get(shelf.room_id) ?? null) : null,
+      !!loan,
+      loan?.borrower_name ?? null,
+    );
+  });
+}
+
+/** Strips characters that have meaning inside PostgREST filter syntax. */
+function sanitizeSearch(q: string): string {
+  return q.replace(/[,()*"\\]/g, ' ').trim();
+}
+
+/** Validates the role / password fields shared by user create & update. */
+function validateUserFields(body: { role?: unknown; password?: unknown }): string | null {
+  if (body.role !== undefined && !ROLES.includes(body.role as DbUser['role'])) {
+    return `role must be one of: ${ROLES.join(', ')}`;
+  }
+  if (body.password !== undefined && String(body.password).length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  }
+  return null;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -146,45 +216,38 @@ function canEditBook(
 // ════════════════════════════════════════════════════════════
 
 /** POST /auth/login — authenticate and set session cookie. */
-router.post(
-  '/auth/login',
-  safeError(async (req: Request, res: Response) => {
-    const { username, password } = req.body ?? {};
+router.post('/auth/login', async (req: Request, res: Response) => {
+  const { username, password } = req.body ?? {};
+  const ip = req.ip ?? 'unknown';
 
-    // Rate-limit by IP before hitting the database
-    if (isRateLimited(req.ip!)) {
-      res.status(429).json({ error: 'Too many failed login attempts. Try again later.' });
-      return;
-    }
+  // Rate-limit by IP before hitting the database
+  if (isRateLimited(ip)) {
+    res.status(429).json({ error: 'Too many failed login attempts. Try again later.' });
+    return;
+  }
 
-    if (!username || !password) {
-      res.status(400).json({ error: 'Username and password are required' });
-      return;
-    }
+  if (!username || !password) {
+    res.status(400).json({ error: 'Username and password are required' });
+    return;
+  }
 
-    const rows = await supaGet<DbUser>('app_users', {
-      username: `eq.${username}`,
-      select: '*',
-    });
+  const rows = await supaGet<DbUser>('app_users', { username: `eq.${username}` });
+  const user = rows[0];
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    recordLoginFailure(ip);
+    res.status(401).json({ error: 'Invalid username or password' });
+    return;
+  }
 
-    if (rows.length === 0 || !verifyPassword(password, rows[0].password_hash)) {
-      res.status(401).json({ error: 'Invalid username or password' });
-      return;
-    }
-
-    const token = signSession(rows[0].id);
-    res.cookie('session', token, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
-    res.json({
-      id: rows[0].id,
-      username: rows[0].username,
-      role: rows[0].role,
-    });
-  }),
-);
+  clearLoginFailures(ip);
+  res.cookie('session', signSession(user.id), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SESSION_MAX_AGE_MS,
+  });
+  res.json(toUser(user));
+});
 
 /** POST /auth/logout — clear the session cookie. */
 router.post('/auth/logout', (_req: Request, res: Response) => {
@@ -192,351 +255,220 @@ router.post('/auth/logout', (_req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// Every route below requires a logged-in user.
+router.use(requireAuth);
+
 /** GET /auth/me — return the currently logged-in user. */
-router.get(
-  '/auth/me',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const user = await getUserOrDie(res, req.session!.userId);
-    if (!user) return;
-    res.json({
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      allowedRoomIds: user.allowed_room_ids,
-    });
-  }),
-);
+router.get('/auth/me', (req: Request, res: Response) => {
+  res.json(toUser(req.user!));
+});
 
 /** PUT /auth/me — self-service password change. */
-router.put(
-  '/auth/me',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const { current_password, new_password } = req.body ?? {};
+router.put('/auth/me', async (req: Request, res: Response) => {
+  const me = req.user!;
+  const { current_password, new_password } = req.body ?? {};
 
-    if (!current_password || !new_password) {
-      res.status(400).json({ error: 'Both current_password and new_password are required' });
-      return;
-    }
-    if (new_password.length < 6) {
-      res.status(400).json({ error: 'New password must be at least 6 characters' });
-      return;
-    }
+  if (!current_password || !new_password) {
+    res.status(400).json({ error: 'Both current_password and new_password are required' });
+    return;
+  }
+  const invalid = validateUserFields({ password: new_password });
+  if (invalid) {
+    res.status(400).json({ error: invalid });
+    return;
+  }
+  if (!verifyPassword(current_password, me.password_hash)) {
+    res.status(401).json({ error: 'Current password is incorrect' });
+    return;
+  }
 
-    const rows = await supaGet<DbUser>('app_users', {
-      id: `eq.${req.session!.userId}`,
-      select: '*',
-    });
-    if (rows.length === 0 || !verifyPassword(current_password, rows[0].password_hash)) {
-      res.status(401).json({ error: 'Current password is incorrect' });
-      return;
-    }
-
-    const newHash = deriveHash(new_password);
-    await supaUpdate('app_users', `eq.${rows[0].id}`, {
-      password_hash: newHash,
-    });
-
-    res.json({ ok: true });
-  }),
-);
+  await supaUpdate('app_users', me.id, { password_hash: deriveHash(new_password) });
+  res.json({ ok: true });
+});
 
 // ════════════════════════════════════════════════════════════
 // 3. Users — admin-only CRUD
 // ════════════════════════════════════════════════════════════
 
-/** GET /users — list all users (admin only). */
-router.get(
-  '/users',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
+/** GET /users — list all users. */
+router.get('/users', requireAdmin, async (_req: Request, res: Response) => {
+  const rows = await supaGet<DbUser>('app_users', { order: 'username' });
+  res.json(rows.map(toUser));
+});
 
-    const rows = await supaGet<DbUser>('app_users', { select: '*' });
-    const list: UserResponse[] = rows.map((r) => ({
-      id: r.id,
-      username: r.username,
-      role: r.role,
-      allowedRoomIds: r.allowed_room_ids,
-    }));
-    res.json(list);
-  }),
-);
+/** POST /users — create a user. */
+router.post('/users', requireAdmin, async (req: Request, res: Response) => {
+  const { username, password, role, allowed_room_ids } = req.body ?? {};
+  if (!username || !password) {
+    res.status(400).json({ error: 'username and password are required' });
+    return;
+  }
+  const invalid = validateUserFields({ role, password });
+  if (invalid) {
+    res.status(400).json({ error: invalid });
+    return;
+  }
 
-/** POST /users — create a user (admin only). */
-router.post(
-  '/users',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
+  const rows = await supaPost<DbUser>('app_users', {
+    username,
+    password_hash: deriveHash(password),
+    role: role ?? 'viewer',
+    allowed_room_ids: allowed_room_ids ?? [],
+  });
+  res.status(201).json(toUser(rows[0]));
+});
 
-    const { username, password, role, allowed_room_ids } = req.body ?? {};
-    if (!username || !password) {
-      res.status(400).json({ error: 'username and password are required' });
-      return;
-    }
+/** PATCH /users/:id — update a user. */
+router.patch('/users/:id', requireAdmin, async (req: Request, res: Response) => {
+  const { username, password, role, allowed_room_ids } = req.body ?? {};
+  const invalid = validateUserFields({ role, password: password || undefined });
+  if (invalid) {
+    res.status(400).json({ error: invalid });
+    return;
+  }
 
-    const hash = deriveHash(password);
-    const rows = await supaPost<DbUser>('app_users', {
-      username,
-      password_hash: hash,
-      role: role ?? 'viewer',
-      allowed_room_ids: allowed_room_ids ?? [],
-    });
+  const updates: Record<string, unknown> = {};
+  if (username) updates.username = username;
+  if (password) updates.password_hash = deriveHash(password);
+  if (role) updates.role = role;
+  if (allowed_room_ids !== undefined) updates.allowed_room_ids = allowed_room_ids;
 
-    res.status(201).json({
-      id: rows[0].id,
-      username: rows[0].username,
-      role: rows[0].role,
-      allowedRoomIds: rows[0].allowed_room_ids,
-    });
-  }),
-);
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: 'Nothing to update' });
+    return;
+  }
 
-/** PATCH /users/:id — update a user (admin only). */
-router.patch(
-  '/users/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
+  const rows = await supaUpdate<DbUser>('app_users', Number(req.params.id), updates);
+  if (rows.length === 0) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+  res.json(toUser(rows[0]));
+});
 
-    const id = Number(req.params.id);
-    const updates: Record<string, unknown> = {};
-
-    if (req.body.password) {
-      updates.password_hash = deriveHash(req.body.password);
-    }
-    if (req.body.role) {
-      updates.role = req.body.role;
-    }
-    if (req.body.allowed_room_ids !== undefined) {
-      updates.allowed_room_ids = req.body.allowed_room_ids;
-    }
-    if (req.body.username) {
-      updates.username = req.body.username;
-    }
-
-    if (Object.keys(updates).length === 0) {
-      res.status(400).json({ error: 'Nothing to update' });
-      return;
-    }
-
-    const rows = await supaUpdate<DbUser>('app_users', `eq.${id}`, updates);
-    if (rows.length === 0) {
-      res.status(404).json({ error: 'User not found' });
-      return;
-    }
-
-    res.json({
-      id: rows[0].id,
-      username: rows[0].username,
-      role: rows[0].role,
-      allowedRoomIds: rows[0].allowed_room_ids,
-    });
-  }),
-);
-
-/** DELETE /users/:id — delete a user (admin only). */
-router.delete(
-  '/users/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
-
-    const id = Number(req.params.id);
-    await supaDelete('app_users', `eq.${id}`);
-    res.json({ ok: true });
-  }),
-);
+/** DELETE /users/:id — delete a user (an admin cannot delete themselves). */
+router.delete('/users/:id', requireAdmin, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  if (id === req.user!.id) {
+    res.status(400).json({ error: 'You cannot delete your own account' });
+    return;
+  }
+  await supaDelete('app_users', id);
+  res.json({ ok: true });
+});
 
 // ════════════════════════════════════════════════════════════
 // 4. Rooms CRUD
 // ════════════════════════════════════════════════════════════
 
-/** GET /rooms — list rooms with book counts. */
-router.get(
-  '/rooms',
-  requireAuth,
-  safeError(async (_req: Request, res: Response) => {
-    const rooms = await supaGet<DbRoom>('rooms', { select: '*', order: 'name' });
-    const books = await supaGet<DbBook>('books', {
-      select: 'shelf_id',
-      status: 'eq.approved',
+/** GET /rooms — list rooms with (approved) book counts. */
+router.get('/rooms', async (_req: Request, res: Response) => {
+  const [rooms, shelves, books] = await Promise.all([
+    supaGet<DbRoom>('rooms', { order: 'name' }),
+    supaGet<DbShelf>('shelves', { select: 'id,room_id' }),
+    supaGet<DbBook>('books', { select: 'shelf_id', status: 'eq.approved', shelf_id: 'not.is.null' }),
+  ]);
+
+  const shelfToRoom = new Map(shelves.map((s) => [s.id, s.room_id]));
+  const counts = new Map<number, number>();
+  for (const b of books) {
+    const roomId = shelfToRoom.get(b.shelf_id!);
+    if (roomId != null) counts.set(roomId, (counts.get(roomId) ?? 0) + 1);
+  }
+
+  res.json(rooms.map((r) => toRoom(r, counts.get(r.id) ?? 0)));
+});
+
+/** POST /rooms — create a room (admin/editor). Editors get edit access to rooms they create. */
+router.post('/rooms', async (req: Request, res: Response) => {
+  const me = req.user!;
+  if (me.role === 'viewer') {
+    res.status(403).json({ error: 'Viewers cannot create rooms' });
+    return;
+  }
+
+  const { name } = req.body ?? {};
+  if (!name) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
+
+  const rows = await supaPost<DbRoom>('rooms', { name });
+  if (me.role === 'editor') {
+    await supaUpdate('app_users', me.id, {
+      allowed_room_ids: [...me.allowed_room_ids, rows[0].id],
     });
+  }
+  res.status(201).json(toRoom(rows[0]));
+});
 
-    // Pre-compute per-room book counts via a shelf_id → room_id lookup
-    const shelves = await supaGet<DbShelf>('shelves', { select: 'id,room_id' });
-    const shelfToRoom = new Map<number, number>();
-    for (const s of shelves) shelfToRoom.set(s.id, s.room_id);
+/** DELETE /rooms/:id — delete a room and clean up stale allowed_room_ids (admin only). */
+router.delete('/rooms/:id', requireAdmin, async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
 
-    const counts = new Map<number, number>();
-    for (const b of books) {
-      if (b.shelf_id == null) continue;
-      const rid = shelfToRoom.get(b.shelf_id);
-      if (rid != null) counts.set(rid, (counts.get(rid) ?? 0) + 1);
-    }
+  // Remove this room from the allowed_room_ids of every user that has it
+  const affected = await supaGet<DbUser>('app_users', {
+    select: 'id,allowed_room_ids',
+    allowed_room_ids: `cs.{${id}}`,
+  });
+  await Promise.all(
+    affected.map((u) =>
+      supaUpdate('app_users', u.id, {
+        allowed_room_ids: u.allowed_room_ids.filter((rid) => rid !== id),
+      }),
+    ),
+  );
 
-    const result: RoomResponse[] = rooms.map((r) => toRoom(r, counts.get(r.id) ?? 0));
-    res.json(result);
-  }),
-);
-
-/** POST /rooms — create a room (admin/editor). */
-router.post(
-  '/rooms',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role === 'viewer') {
-      res.status(403).json({ error: 'Viewers cannot create rooms' });
-      return;
-    }
-
-    const { name } = req.body ?? {};
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
-    }
-
-    const rows = await supaPost<DbRoom>('rooms', { name });
-    res.status(201).json(toRoom(rows[0]));
-  }),
-);
-
-/** DELETE /rooms/:id — delete a room and clean up stale allowed_room_ids. */
-router.delete(
-  '/rooms/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
-
-    const id = Number(req.params.id);
-
-    // Remove this room from every user's allowed_room_ids array
-    const allUsers = await supaGet<DbUser>('app_users', { select: 'id,allowed_room_ids' });
-    for (const u of allUsers) {
-      if (u.allowed_room_ids.includes(id)) {
-        await supaUpdate('app_users', `eq.${u.id}`, {
-          allowed_room_ids: u.allowed_room_ids.filter((rid) => rid !== id),
-        });
-      }
-    }
-
-    await supaDelete('rooms', `eq.${id}`);
-    res.json({ ok: true });
-  }),
-);
+  await supaDelete('rooms', id);
+  res.json({ ok: true });
+});
 
 // ════════════════════════════════════════════════════════════
 // 5. Shelves CRUD
 // ════════════════════════════════════════════════════════════
 
-/** GET /rooms/:roomId/shelves — list shelves in a room. */
-router.get(
-  '/rooms/:roomId/shelves',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const roomId = Number(req.params.roomId);
-    const shelves = await supaGet<DbShelf>('shelves', {
-      room_id: `eq.${roomId}`,
-      select: '*',
-      order: 'name',
-    });
-    const books = await supaGet<DbBook>('books', {
-      shelf_id: `in.(${shelves.map((s) => s.id).join(',')})`,
-      status: 'eq.approved',
-      select: 'shelf_id',
-    });
+/** GET /shelves — list every shelf with (approved) book counts. */
+router.get('/shelves', async (_req: Request, res: Response) => {
+  const [shelves, books] = await Promise.all([
+    supaGet<DbShelf>('shelves', { order: 'name' }),
+    supaGet<DbBook>('books', { select: 'shelf_id', status: 'eq.approved', shelf_id: 'not.is.null' }),
+  ]);
 
-    const counts = new Map<number, number>();
-    for (const b of books) {
-      if (b.shelf_id != null) {
-        counts.set(b.shelf_id, (counts.get(b.shelf_id) ?? 0) + 1);
-      }
-    }
+  const counts = new Map<number, number>();
+  for (const b of books) counts.set(b.shelf_id!, (counts.get(b.shelf_id!) ?? 0) + 1);
 
-    const result: ShelfResponse[] = shelves.map((s) =>
-      toShelf(s, counts.get(s.id) ?? 0),
-    );
-    res.json(result);
-  }),
-);
+  res.json(shelves.map((s) => toShelf(s, counts.get(s.id) ?? 0)));
+});
 
 /** POST /rooms/:roomId/shelves — add a shelf to a room. */
-router.post(
-  '/rooms/:roomId/shelves',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    const roomId = Number(req.params.roomId);
+router.post('/rooms/:roomId/shelves', async (req: Request, res: Response) => {
+  const roomId = Number(req.params.roomId);
+  if (!canEditRoomLocation(req.user!, roomId)) {
+    res.status(403).json({ error: 'You do not have access to this room' });
+    return;
+  }
 
-    if (!canEditRoomLocation(me, roomId)) {
-      res.status(403).json({ error: 'You do not have access to this room' });
-      return;
-    }
+  const { name } = req.body ?? {};
+  if (!name) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
 
-    const { name } = req.body ?? {};
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
-    }
-
-    const rows = await supaPost<DbShelf>('shelves', {
-      room_id: roomId,
-      name,
-    });
-    res.status(201).json(toShelf(rows[0]));
-  }),
-);
+  const rows = await supaPost<DbShelf>('shelves', { room_id: roomId, name });
+  res.status(201).json(toShelf(rows[0]));
+});
 
 /** DELETE /shelves/:id — remove a shelf. */
-router.delete(
-  '/shelves/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
+router.delete('/shelves/:id', async (req: Request, res: Response) => {
+  const shelfId = Number(req.params.id);
+  if (!canEditRoomLocation(req.user!, await getShelfRoomId(shelfId))) {
+    res.status(403).json({ error: 'You do not have access to this room' });
+    return;
+  }
 
-    const shelfId = Number(req.params.id);
-    const roomId = await getShelfRoomId(shelfId);
-
-    if (!canEditRoomLocation(me, roomId)) {
-      res.status(403).json({ error: 'You do not have access to this room' });
-      return;
-    }
-
-    await supaDelete('shelves', `eq.${shelfId}`);
-    res.json({ ok: true });
-  }),
-);
+  await supaDelete('shelves', shelfId);
+  res.json({ ok: true });
+});
 
 // ════════════════════════════════════════════════════════════
 // 6. Books CRUD (with pending-book workflow)
@@ -549,358 +481,283 @@ router.delete(
  *   q          – search (title/author/genre)
  *   genre      – exact genre match
  *   author     – exact author match
- *   room       – room ID (via shelf → room join)
+ *   room       – room ID (via shelf → room join; ignored when `shelf` is set)
  *   shelf      – shelf ID
- *   status     – 'approved' (default) | 'pending' (admin/owner only)
+ *   status     – omitted: approved books plus the pending books the user may see
+ *                'pending': only the pending books the user may see
  *   page       – 1-based page number (default 1)
- *   limit      – results per page (default 12)
- *   all        – 'true' to skip pagination (used by dashboard)
+ *   limit      – results per page (default 12, max 100)
+ *
+ * Pending books are visible to admins and to the user who created them.
  */
-router.get(
-  '/books',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
+router.get('/books', async (req: Request, res: Response) => {
+  const me = req.user!;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 12));
 
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 12));
-    const fetchAll = req.query.all === 'true';
+  const params: Record<string, string> = {
+    order: 'title',
+    offset: String((page - 1) * limit),
+    limit: String(limit),
+  };
+  // Conditions that must all hold; each may itself be an or(...) group.
+  const conditions: string[] = [];
 
-    // Start with approved books; admin/owner also get pending
-    const statusFilter: string[] = ['status.eq.approved'];
-    if (me.role === 'admin' || req.query.status === 'pending') {
-      statusFilter.push('status.eq.pending');
-    }
+  if (req.query.status === 'pending') {
+    params.status = 'eq.pending';
+    if (me.role !== 'admin') params.created_by = `eq.${me.id}`;
+  } else if (me.role !== 'admin') {
+    conditions.push(`or(status.eq.approved,created_by.eq.${me.id})`);
+  }
 
-    // Build PostgREST filters
-    const params: Record<string, string> = {
-      select: '*',
-      or: `(${statusFilter.join(',')})`,
-      order: 'title',
-    };
+  const q = sanitizeSearch(String(req.query.q ?? ''));
+  if (q) conditions.push(`or(title.ilike.*${q}*,author.ilike.*${q}*,genre.ilike.*${q}*)`);
+  if (conditions.length > 0) params.and = `(${conditions.join(',')})`;
 
-    if (req.query.q) {
-      params.or = `(${statusFilter.join(',')},and(title.ilike.*${req.query.q}*,author.ilike.*${req.query.q}*))`;
-    }
-    if (req.query.genre) params.genre = `eq.${req.query.genre}`;
-    if (req.query.author) params.author = `eq.${req.query.author}`;
-    if (req.query.shelf) params.shelf_id = `eq.${req.query.shelf}`;
+  if (req.query.genre) params.genre = `eq.${req.query.genre}`;
+  if (req.query.author) params.author = `eq.${req.query.author}`;
 
-    // Room filter: expand room → shelf IDs (only if no explicit shelf filter)
-    if (req.query.room && !req.query.shelf) {
-      const roomId = Number(req.query.room);
-      const roomShelves = await supaGet<DbShelf>('shelves', {
-        room_id: `eq.${roomId}`,
-        select: 'id',
-      });
-      if (roomShelves.length === 0) {
-        res.json({ items: [], total: 0, page, limit });
-        return;
-      }
-      params.shelf_id = `in.(${roomShelves.map((s) => s.id).join(',')})`;
-    }
-
-    // Fetch books (paginated or all)
-    let books: DbBook[];
-    let total: number;
-
-    if (fetchAll) {
-      books = await supaGet<DbBook>('books', params);
-      total = books.length;
-    } else {
-      const from = (page - 1) * limit;
-      const to = from + limit - 1;
-      params.offset = String(from);
-      params.limit = String(limit);
-      const result = await supaGetWithCount<DbBook>('books', params);
-      books = result.rows;
-      total = result.total;
-    }
-
-    // If viewer, only show own pending books
-    let filtered = books;
-    if (me.role === 'viewer') {
-      filtered = books.filter(
-        (b) => b.status === 'approved' || b.created_by === me.id,
-      );
-    }
-
-    // Resolve shelf → room names
-    const shelfIds = [...new Set(filtered.map((b) => b.shelf_id).filter(Boolean))] as number[];
-    const shelfMap = new Map<number, { name: string; roomId: number }>();
-    if (shelfIds.length > 0) {
-      const shelfRows = await supaGet<DbShelf>('shelves', {
-        id: `in.(${shelfIds.join(',')})`,
-        select: '*',
-      });
-      for (const s of shelfRows) shelfMap.set(s.id, { name: s.name, roomId: s.room_id });
-    }
-    const roomIds = [...new Set([...shelfMap.values()].map((v) => v.roomId))];
-    const roomMap = new Map<number, string>();
-    if (roomIds.length > 0) {
-      const roomRows = await supaGet<DbRoom>('rooms', {
-        id: `in.(${roomIds.join(',')})`,
-        select: '*',
-      });
-      for (const r of roomRows) roomMap.set(r.id, r.name);
-    }
-
-    const items: BookResponse[] = filtered.map((b) => {
-      const shelf = b.shelf_id ? shelfMap.get(b.shelf_id) : undefined;
-      return toBook(
-        b,
-        shelf?.name ?? null,
-        shelf?.roomId ?? null,
-        shelf ? (roomMap.get(shelf.roomId) ?? null) : null,
-      );
+  if (req.query.shelf) {
+    params.shelf_id = `eq.${Number(req.query.shelf)}`;
+  } else if (req.query.room) {
+    const roomShelves = await supaGet<DbShelf>('shelves', {
+      room_id: `eq.${Number(req.query.room)}`,
+      select: 'id',
     });
-
-    res.json({ items, total, page, limit });
-  }),
-);
-
-/** GET /books/:id — get a single book. Viewers only see approved or own pending. */
-router.get(
-  '/books/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-
-    const id = Number(req.params.id);
-    const rows = await supaGet<DbBook>('books', {
-      id: `eq.${id}`,
-      select: '*',
-    });
-    if (rows.length === 0) {
-      res.status(404).json({ error: 'Book not found' });
+    if (roomShelves.length === 0) {
+      res.json({ items: [], total: 0, page, limit });
       return;
     }
+    params.shelf_id = `in.(${roomShelves.map((s) => s.id).join(',')})`;
+  }
 
-    const book = rows[0];
-    if (me.role === 'viewer' && book.status === 'pending' && book.created_by !== me.id) {
-      res.status(404).json({ error: 'Book not found' });
-      return;
-    }
+  const { rows, total } = await supaGetWithCount<DbBook>('books', params);
+  res.json({ items: await enrichBooks(rows), total, page, limit });
+});
 
-    // Resolve shelf → room
-    const shelf = book.shelf_id
-      ? (await supaGet<DbShelf>('shelves', { id: `eq.${book.shelf_id}`, select: '*' }))[0]
-      : null;
-    const room = shelf
-      ? (await supaGet<DbRoom>('rooms', { id: `eq.${shelf.room_id}`, select: '*' }))[0]
-      : null;
-
-    res.json(toBook(book, shelf?.name ?? null, shelf?.room_id ?? null, room?.name ?? null));
-  }),
-);
+/** GET /books/:id — get a single book. */
+router.get('/books/:id', async (req: Request, res: Response) => {
+  const book = await findBookOr404(res, Number(req.params.id));
+  if (!book) return;
+  if (!canSeeBook(req.user!, book)) {
+    res.status(404).json({ error: 'Book not found' });
+    return;
+  }
+  res.json((await enrichBooks([book]))[0]);
+});
 
 /**
  * POST /books — create a book.
- *   - Without shelf → status = 'pending'
  *   - With shelf    → must have canEditRoomLocation → status = 'approved'
- *   - Admin-created books are always 'approved'
+ *   - Without shelf → 'approved' for admins, otherwise 'pending'
  */
-router.post(
-  '/books',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
+router.post('/books', async (req: Request, res: Response) => {
+  const me = req.user!;
+  const { title, author, isbn, genre, notes } = req.body ?? {};
+  const shelfId = req.body?.shelf_id ? Number(req.body.shelf_id) : null;
 
-    const { title, shelf_id } = req.body ?? {};
-    if (!title) {
-      res.status(400).json({ error: 'Title is required' });
-      return;
-    }
+  if (!title?.trim()) {
+    res.status(400).json({ error: 'Title is required' });
+    return;
+  }
+  if (shelfId && !canEditRoomLocation(me, await getShelfRoomId(shelfId))) {
+    res.status(403).json({ error: 'You do not have access to this shelf' });
+    return;
+  }
 
-    let status: 'approved' | 'pending' = 'pending';
-    let resolvedShelfId = shelf_id ?? null;
-
-    if (resolvedShelfId) {
-      const room_id = await getShelfRoomId(resolvedShelfId);
-      if (!canEditRoomLocation(me, room_id)) {
-        res.status(403).json({ error: 'You do not have access to this shelf' });
-        return;
-      }
-      status = 'approved';
-    } else if (me.role === 'admin') {
-      status = 'approved';
-    }
-
-    const data: Record<string, unknown> = {
-      title,
-      author: req.body.author ?? null,
-      isbn: req.body.isbn ?? null,
-      genre: req.body.genre ?? null,
-      notes: req.body.notes ?? null,
-      shelf_id: resolvedShelfId,
-      status,
-      created_by: me.id,
-    };
-
-    const rows = await supaPost<DbBook>('books', data);
-    res.status(201).json(toBook(rows[0]));
-  }),
-);
+  const rows = await supaPost<DbBook>('books', {
+    title,
+    author: author || null,
+    isbn: isbn || null,
+    genre: genre || null,
+    notes: notes || null,
+    shelf_id: shelfId,
+    status: shelfId || me.role === 'admin' ? 'approved' : 'pending',
+    created_by: me.id,
+  });
+  res.status(201).json((await enrichBooks(rows))[0]);
+});
 
 /**
  * PUT /books/:id — update a book.
- *   - Editors can only update books in their allowed rooms.
- *   - Viewers can update their own pending books.
- *   - Shelf assignment requires canEditRoomLocation and flips status → approved.
- *   - Removing a shelf flips status → pending.
+ *   - Requires canEditBook.
+ *   - Moving to a shelf requires canEditRoomLocation and approves the book.
+ *   - Removing the shelf makes it pending again (unless done by an admin).
  */
-router.put(
-  '/books/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
+router.put('/books/:id', async (req: Request, res: Response) => {
+  const me = req.user!;
+  const id = Number(req.params.id);
+  const existing = await findBookOr404(res, id);
+  if (!existing) return;
 
-    const id = Number(req.params.id);
-    const rows = await supaGet<DbBook>('books', { id: `eq.${id}`, select: '*' });
-    if (rows.length === 0) {
-      res.status(404).json({ error: 'Book not found' });
+  if (!canEditBook(me, existing, await getShelfRoomId(existing.shelf_id))) {
+    res.status(403).json({ error: 'Not allowed to edit this book' });
+    return;
+  }
+
+  const { title, author, isbn, genre, notes, shelf_id } = req.body ?? {};
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+  if (title !== undefined) {
+    if (!String(title).trim()) {
+      res.status(400).json({ error: 'Title is required' });
       return;
     }
-    const existing = rows[0];
+    updates.title = title;
+  }
+  if (author !== undefined) updates.author = author || null;
+  if (isbn !== undefined) updates.isbn = isbn || null;
+  if (genre !== undefined) updates.genre = genre || null;
+  if (notes !== undefined) updates.notes = notes || null;
 
-    const existingShelfRoomId = existing.shelf_id ? await getShelfRoomId(existing.shelf_id) : null;
-    if (!canEditBook(me, existing, existingShelfRoomId)) {
-      res.status(403).json({ error: 'Not allowed to edit this book' });
+  // Only a change of shelf affects status — re-saving the same shelf must not.
+  const newShelfId = shelf_id === undefined ? existing.shelf_id : shelf_id ? Number(shelf_id) : null;
+  if (newShelfId !== existing.shelf_id) {
+    if (newShelfId && !canEditRoomLocation(me, await getShelfRoomId(newShelfId))) {
+      res.status(403).json({ error: 'You do not have access to this shelf' });
       return;
     }
+    updates.shelf_id = newShelfId;
+    updates.status = newShelfId || me.role === 'admin' ? 'approved' : 'pending';
+  }
 
-    const { shelf_id, ...rest } = req.body ?? {};
-    const updates: Record<string, unknown> = {};
-    if (rest.title !== undefined) updates.title = rest.title;
-    if (rest.author !== undefined) updates.author = rest.author || null;
-    if (rest.isbn !== undefined) updates.isbn = rest.isbn || null;
-    if (rest.genre !== undefined) updates.genre = rest.genre || null;
-    if (rest.notes !== undefined) updates.notes = rest.notes || null;
+  const updated = await supaUpdate<DbBook>('books', id, updates);
+  res.json((await enrichBooks(updated))[0]);
+});
 
-    // Handle shelf assignment / removal
-    if (shelf_id !== undefined) {
-      if (shelf_id) {
-        const newRoomId = await getShelfRoomId(shelf_id);
-        if (!canEditRoomLocation(me, newRoomId)) {
-          res.status(403).json({ error: 'You do not have access to this shelf' });
-          return;
-        }
-        updates.shelf_id = shelf_id;
-        updates.status = 'approved'; // shelf assignment = approval
-      } else {
-        updates.shelf_id = null;
-        updates.status = 'pending'; // removing shelf = back to pending
-      }
-    }
+/** DELETE /books/:id — delete a book (same permissions as editing). */
+router.delete('/books/:id', async (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const book = await findBookOr404(res, id);
+  if (!book) return;
 
-    updates.updated_at = new Date().toISOString();
+  if (!canEditBook(req.user!, book, await getShelfRoomId(book.shelf_id))) {
+    res.status(403).json({ error: 'Not allowed to delete this book' });
+    return;
+  }
 
-    const updated = await supaUpdate<DbBook>('books', `eq.${id}`, updates);
-    res.json(toBook(updated[0]));
-  }),
-);
-
-/** DELETE /books/:id — delete a book.
- *   - Admins can delete anything.
- *   - Owners can delete their own pending books.
- *   - Editors can delete books in their allowed rooms.
- */
-router.delete(
-  '/books/:id',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-
-    const id = Number(req.params.id);
-    const rows = await supaGet<DbBook>('books', { id: `eq.${id}`, select: '*' });
-    if (rows.length === 0) {
-      res.status(404).json({ error: 'Book not found' });
-      return;
-    }
-
-    const book = rows[0];
-    const bookRoomId = book.shelf_id ? await getShelfRoomId(book.shelf_id) : null;
-
-    // Permission check
-    if (me.role === 'admin') {
-      // OK
-    } else if (book.status === 'pending' && book.created_by === me.id) {
-      // Owner can delete own pending
-    } else if (!canEditBook(me, book, bookRoomId)) {
-      res.status(403).json({ error: 'Not allowed to delete this book' });
-      return;
-    }
-
-    await supaDelete('books', `eq.${id}`);
-    res.json({ ok: true });
-  }),
-);
+  await supaDelete('books', id);
+  res.json({ ok: true });
+});
 
 // ════════════════════════════════════════════════════════════
 // 7. Genre / Author / Stats endpoints
 // ════════════════════════════════════════════════════════════
 
+/** Distinct, sorted values of a text column across approved books. */
+async function distinctBookValues(column: 'genre' | 'author'): Promise<string[]> {
+  const rows = await supaGet<DbBook>('books', {
+    select: column,
+    status: 'eq.approved',
+    [column]: 'not.is.null',
+  });
+  return [...new Set(rows.map((b) => b[column]!))].sort();
+}
+
 /** GET /genres — unique genre list (approved books only). */
-router.get(
-  '/genres',
-  requireAuth,
-  safeError(async (_req: Request, res: Response) => {
-    const books = await supaGet<DbBook>('books', {
-      select: 'genre',
-      status: 'eq.approved',
-      genre: 'not.is.null',
-    });
-    const genres = [...new Set(books.map((b) => b.genre).filter(Boolean))].sort();
-    res.json(genres);
-  }),
-);
+router.get('/genres', async (_req: Request, res: Response) => {
+  res.json(await distinctBookValues('genre'));
+});
 
 /** GET /authors — unique author list (approved books only). */
-router.get(
-  '/authors',
-  requireAuth,
-  safeError(async (_req: Request, res: Response) => {
-    const books = await supaGet<DbBook>('books', {
-      select: 'author',
-      status: 'eq.approved',
-      author: 'not.is.null',
-    });
-    const authors = [...new Set(books.map((b) => b.author).filter(Boolean))].sort();
-    res.json(authors);
-  }),
-);
+router.get('/authors', async (_req: Request, res: Response) => {
+  res.json(await distinctBookValues('author'));
+});
 
 /** GET /stats — summary counts for the admin dashboard. */
-router.get(
-  '/stats',
-  requireAuth,
-  safeError(async (req: Request, res: Response) => {
-    const me = await getUserOrDie(res, req.session!.userId);
-    if (!me) return;
-    if (me.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
+router.get('/stats', requireAdmin, async (_req: Request, res: Response) => {
+  const [books, shelves, rooms, users, pendingBooks] = await Promise.all([
+    supaCount('books', { status: 'eq.approved' }),
+    supaCount('shelves'),
+    supaCount('rooms'),
+    supaCount('app_users'),
+    supaCount('books', { status: 'eq.pending' }),
+  ]);
+  res.json({ books, shelves, rooms, users, pendingBooks });
+});
 
-    const [books, shelves, rooms, users, pendingBooks] = await Promise.all([
-      supaGet<DbBook>('books', { select: 'id', status: 'eq.approved' }),
-      supaGet<DbShelf>('shelves', { select: 'id' }),
-      supaGet<DbRoom>('rooms', { select: 'id' }),
-      supaGet<DbUser>('app_users', { select: 'id' }),
-      supaGet<DbBook>('books', { select: 'id', status: 'eq.pending' }),
-    ]);
+// ════════════════════════════════════════════════════════════
+// 8. Loans — lending / returning (admin + editor only)
+// ════════════════════════════════════════════════════════════
 
-    res.json({
-      books: books.length,
-      shelves: shelves.length,
-      rooms: rooms.length,
-      users: users.length,
-      pendingBooks: pendingBooks.length,
-    });
-  }),
-);
+/** GET /books/:id/loans — full borrowing history for a book (newest first). */
+router.get('/books/:id/loans', async (req: Request, res: Response) => {
+  const book = await findBookOr404(res, Number(req.params.id));
+  if (!book) return;
+  if (!canSeeBook(req.user!, book)) {
+    res.status(404).json({ error: 'Book not found' });
+    return;
+  }
+
+  const rows = await supaGet<DbLoan>('loans', {
+    book_id: `eq.${book.id}`,
+    order: 'lent_at.desc',
+  });
+
+  const names = await getUserNameMap(
+    rows.flatMap((l) => [l.lent_by, l.returned_by]).filter((v): v is number => v != null),
+  );
+  const nameOf = (id: number | null) => (id != null ? (names.get(id) ?? null) : null);
+
+  res.json(rows.map((l) => toLoan(l, nameOf(l.lent_by), nameOf(l.returned_by))));
+});
+
+/**
+ * POST /books/:id/loans — lend the book to someone.
+ * Body: { borrower_name: string }  (free text, not an app user)
+ * Fails with 409 if the book is already on loan.
+ */
+router.post('/books/:id/loans', async (req: Request, res: Response) => {
+  const me = req.user!;
+  if (!canLend(me)) {
+    res.status(403).json({ error: 'Only admins and editors can lend books' });
+    return;
+  }
+
+  const book = await findBookOr404(res, Number(req.params.id));
+  if (!book) return;
+
+  const borrowerName = String(req.body?.borrower_name ?? '').trim();
+  if (!borrowerName) {
+    res.status(400).json({ error: 'borrower_name is required' });
+    return;
+  }
+
+  if ((await getActiveLoanMap([book.id])).has(book.id)) {
+    res.status(409).json({ error: 'The book is already on loan' });
+    return;
+  }
+
+  const rows = await supaPost<DbLoan>('loans', {
+    book_id: book.id,
+    borrower_name: borrowerName,
+    lent_by: me.id,
+  });
+  res.status(201).json(toLoan(rows[0], me.username));
+});
+
+/** POST /loans/:id/return — mark a loan as returned. */
+router.post('/loans/:id/return', async (req: Request, res: Response) => {
+  const me = req.user!;
+  if (!canLend(me)) {
+    res.status(403).json({ error: 'Only admins and editors can return books' });
+    return;
+  }
+
+  const loanId = Number(req.params.id);
+  const rows = await supaGet<DbLoan>('loans', { id: `eq.${loanId}` });
+  if (rows.length === 0) {
+    res.status(404).json({ error: 'Loan not found' });
+    return;
+  }
+  if (rows[0].returned_at) {
+    res.status(400).json({ error: 'This loan was already returned' });
+    return;
+  }
+
+  const updated = await supaUpdate<DbLoan>('loans', loanId, {
+    returned_at: new Date().toISOString(),
+    returned_by: me.id,
+  });
+  res.json(toLoan(updated[0], null, me.username));
+});

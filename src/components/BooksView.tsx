@@ -6,10 +6,11 @@ import { useData } from '../data/DataContext';
 import Loading from './Loading';
 import BookCard from './BookCard';
 import BookModal from './BookModal';
+import BookDetailModal from './BookDetailModal';
 
 export default function BooksView() {
   const { me } = useAuth();
-  const { genres, authors, rooms, shelves } = useData();
+  const { genres, authors, rooms, shelves, refresh } = useData();
   const [searchParams, setSearchParams] = useSearchParams();
   const shelfParam = searchParams.get('shelf');
 
@@ -27,6 +28,7 @@ export default function BooksView() {
   const [total, setTotal] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState<Book | 'new' | null>(null);
+  const [detail, setDetail] = useState<Book | null>(null);
 
   // Debounce the search box
   useEffect(() => {
@@ -71,16 +73,23 @@ export default function BooksView() {
         setBooks(data.items);
         setTotal(data.total);
       })
-      .catch(() => {
-        if (!cancelled && books === null) {
-          setBooks([]);
-        }
+      .catch((err) => {
+        console.error('load books', err);
+        if (!cancelled) setBooks((prev) => prev ?? []);
       });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, reloadKey]);
+
+  /** Reload the current page and the shared filter data (counts, genres...). */
+  const reload = () => {
+    setReloadKey((k) => k + 1);
+    refresh();
+  };
+
+  // Only offer the shelves of the selected room
+  const shelfOptions = room ? shelves.filter((s) => s.roomId === Number(room)) : shelves;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = books === null ? 0 : (page - 1) * pageSize + 1;
@@ -102,9 +111,9 @@ export default function BooksView() {
     if (!confirm('בטוח למחוק?')) return;
     try {
       await api.deleteBook(book.id);
-      setReloadKey((k) => k + 1);
+      reload();
     } catch (err) {
-      console.error('deleteBook', err);
+      alert(err instanceof Error ? err.message : 'שגיאה במחיקה');
     }
   };
 
@@ -133,7 +142,7 @@ export default function BooksView() {
             <option key={g} value={g}>{g}</option>
           ))}
         </select>
-        <select value={room} onChange={(e) => { setRoom(e.target.value); setPage(1); }}>
+        <select value={room} onChange={(e) => { setRoom(e.target.value); setShelf(''); setPage(1); }}>
           <option value="">כל החדרים</option>
           {rooms.map((r) => (
             <option key={r.id} value={r.id}>{r.name}</option>
@@ -141,7 +150,7 @@ export default function BooksView() {
         </select>
         <select value={shelf} onChange={(e) => { setShelf(e.target.value); setPage(1); }}>
           <option value="">כל המדפים</option>
-          {shelves.map((s) => (
+          {shelfOptions.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
@@ -176,7 +185,13 @@ export default function BooksView() {
       ) : (
         <div className="book-grid">
           {books.map((b) => (
-            <BookCard key={b.id} book={b} onEdit={setEditing} onDelete={handleDelete} />
+            <BookCard
+              key={b.id}
+              book={b}
+              onOpen={setDetail}
+              onEdit={setEditing}
+              onDelete={handleDelete}
+            />
           ))}
         </div>
       )}
@@ -237,8 +252,19 @@ export default function BooksView() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            setPage(1);
-            setReloadKey((k) => k + 1);
+            reload();
+          }}
+        />
+      )}
+
+      {detail !== null && (
+        <BookDetailModal
+          book={detail}
+          onClose={() => setDetail(null)}
+          onChanged={reload}
+          onEdit={(b) => {
+            setDetail(null);
+            setEditing(b);
           }}
         />
       )}

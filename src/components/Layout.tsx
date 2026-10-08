@@ -1,26 +1,19 @@
 /*
  * src/components/Layout.tsx — app shell
  *
- * Keeps every visited view mounted and simply shows/hides it on
- * navigation.  This mirrors the old single-page behavior: once a view
- * has loaded its data, revisiting it re-renders instantly instead of
- * refetching from the API or flashing a spinner.
+ * Header, navigation and the routes of the logged-in app. Admin-only
+ * routes redirect other roles to /books; unknown URLs show a 404 state.
  */
 
-import { useEffect, useState } from 'react';
-import { NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { roleLabels } from '../roles';
 import ProfileModal from './ProfileModal';
 import BooksView from './BooksView';
 import RoomsView from './RoomsView';
 import UsersView from './UsersView';
 import Dashboard from './Dashboard';
-
-const roleLabels: Record<string, string> = {
-  admin: 'מנהל',
-  editor: 'עורך',
-  viewer: 'צופה',
-};
 
 const VIEWS: { path: string; name: string; adminOnly?: boolean }[] = [
   { path: '/dashboard', name: 'לוח בקרה', adminOnly: true },
@@ -29,85 +22,80 @@ const VIEWS: { path: string; name: string; adminOnly?: boolean }[] = [
   { path: '/users', name: 'ניהול משתמשים', adminOnly: true },
 ];
 
+function NotFound() {
+  return (
+    <div className="empty-state">
+      <h2>העמוד לא נמצא</h2>
+      <p>הכתובת שחיפשת אינה קיימת במערכת.</p>
+      <NavLink className="btn btn-primary" to="/books">
+        חזרה לעמוד הספרים
+      </NavLink>
+    </div>
+  );
+}
+
 export default function Layout() {
   const { me, logout } = useAuth();
-  const navigate = useNavigate();
-  const { pathname } = useLocation();
   const [profileOpen, setProfileOpen] = useState(false);
-  const [seen, setSeen] = useState<string[]>([]);
-
-  const current = VIEWS.find(
-    (v) => v.path === pathname && (!v.adminOnly || me?.role === 'admin'),
-  )?.path;
-
-  useEffect(() => {
-    if (!current) return;
-    setSeen((prev) => (prev.includes(current) ? prev : [...prev, current]));
-  }, [current]);
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/', { replace: true });
-  };
-
-  if (!current) return <Navigate to="/books" replace />;
+  const isAdmin = me?.role === 'admin';
 
   return (
     <div id="app">
-      <header>
+      <header className="app-header">
         <div className="header-row">
-          <h1>📚 מנהל ספרייה</h1>
+          <h1 className="app-brand">📚 מנהל ספרייה</h1>
           {me && (
             <div className="user-box">
-              <span>{me.username}</span>
-              <span className={`role-badge badge-${me.role}`}>
-                {roleLabels[me.role]}
-              </span>
+              <div className="user-identity">
+                <span className="user-name">{me.username}</span>
+                <span className={`role-badge badge-${me.role}`}>
+                  {roleLabels[me.role]}
+                </span>
+              </div>
               <button
+                type="button"
                 className="btn btn-secondary btn-small"
                 onClick={() => setProfileOpen(true)}
               >
                 שינוי סיסמה
               </button>
-              <button className="btn btn-secondary btn-small" onClick={handleLogout}>
+              <button type="button" className="btn btn-secondary btn-small" onClick={logout}>
                 התנתקות
               </button>
             </div>
           )}
         </div>
-        <nav>
-          {VIEWS.filter((v) => !v.adminOnly || me?.role === 'admin').map((v) => (
-            <NavLink key={v.path} className="nav-btn" to={v.path}>
+        <nav className="app-nav" aria-label="ניווט ראשי">
+          {VIEWS.filter((v) => !v.adminOnly || isAdmin).map((v) => (
+            <NavLink
+              key={v.path}
+              className={({ isActive }) => `nav-btn${isActive ? ' active' : ''}`}
+              to={v.path}
+            >
               {v.name}
             </NavLink>
           ))}
         </nav>
       </header>
 
-      <main>
-        {seen.includes('/books') && (
-          <div style={{ display: current === '/books' ? 'block' : 'none' }}>
-            <BooksView />
-          </div>
-        )}
-        {seen.includes('/rooms') && (
-          <div style={{ display: current === '/rooms' ? 'block' : 'none' }}>
-            <RoomsView />
-          </div>
-        )}
-        {seen.includes('/users') && (
-          <div style={{ display: current === '/users' ? 'block' : 'none' }}>
-            <UsersView />
-          </div>
-        )}
-        {seen.includes('/dashboard') && (
-          <div style={{ display: current === '/dashboard' ? 'block' : 'none' }}>
-            <Dashboard />
-          </div>
-        )}
+      <main className="page-content">
+        <Routes>
+          <Route path="/" element={<Navigate to="/books" replace />} />
+          <Route path="/books" element={<BooksView />} />
+          <Route path="/rooms" element={<RoomsView />} />
+          <Route
+            path="/users"
+            element={isAdmin ? <UsersView /> : <Navigate to="/books" replace />}
+          />
+          <Route
+            path="/dashboard"
+            element={isAdmin ? <Dashboard /> : <Navigate to="/books" replace />}
+          />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
       </main>
 
-      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
+      {profileOpen && <ProfileModal onClose={() => setProfileOpen(false)} />}
     </div>
   );
 }
