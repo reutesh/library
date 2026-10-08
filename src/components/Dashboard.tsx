@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type Stats } from '../api';
+import { usePersistentState } from '../data/persistentState';
 import Loading from './Loading';
 
 const STAT_LABELS: [keyof Stats, string][] = [
@@ -11,7 +12,7 @@ const STAT_LABELS: [keyof Stats, string][] = [
 ];
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [stats, setStats] = usePersistentState<Stats | null>('stats', null);
   const [error, setError] = useState('');
 
   useEffect(() => {

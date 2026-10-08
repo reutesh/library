@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, type User } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { useData } from '../data/DataContext';
+import { usePersistentState } from '../data/persistentState';
 import { roleLabels } from '../roles';
 import Loading from './Loading';
 import UserModal from './UserModal';
@@ -9,7 +10,7 @@ import UserModal from './UserModal';
 export default function UsersView() {
   const { me } = useAuth();
   const { rooms } = useData();
-  const [users, setUsers] = useState<User[] | null>(null);
+  const [users, setUsers] = usePersistentState<User[] | null>('users', null);
   const [editing, setEditing] = useState<User | 'new' | null>(null);
 
   const load = async () => {

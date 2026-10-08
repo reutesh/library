@@ -485,6 +485,7 @@ router.delete('/shelves/:id', async (req: Request, res: Response) => {
  *   shelf      – shelf ID
  *   status     – omitted: approved books plus the pending books the user may see
  *                'pending': only the pending books the user may see
+ *   loan       – 'out': only books currently on loan; 'in': only available books
  *   page       – 1-based page number (default 1)
  *   limit      – results per page (default 12, max 100)
  *
@@ -529,6 +530,20 @@ router.get('/books', async (req: Request, res: Response) => {
       return;
     }
     params.shelf_id = `in.(${roomShelves.map((s) => s.id).join(',')})`;
+  }
+
+  if (req.query.loan === 'out' || req.query.loan === 'in') {
+    const activeLoans = await supaGet<DbLoan>('loans', { select: 'book_id', returned_at: 'is.null' });
+    const onLoanIds = activeLoans.map((l) => l.book_id).join(',');
+    if (req.query.loan === 'out') {
+      if (!onLoanIds) {
+        res.json({ items: [], total: 0, page, limit });
+        return;
+      }
+      params.id = `in.(${onLoanIds})`;
+    } else if (onLoanIds) {
+      params.id = `not.in.(${onLoanIds})`;
+    }
   }
 
   const { rows, total } = await supaGetWithCount<DbBook>('books', params);

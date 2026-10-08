@@ -8,6 +8,7 @@
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, type Me } from '../api';
+import { clearPersistentState } from '../data/persistentState';
 
 interface AuthContextValue {
   me: Me | null;
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const user = await api.login(username, password);
+    clearPersistentState();
     setMe(user);
   };
 
@@ -53,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     await api.logout();
+    clearPersistentState();
     setMe(null);
   };
 

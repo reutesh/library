@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api, type Book } from '../api';
 import { useAuth } from '../auth/AuthContext';
 import { useData } from '../data/DataContext';
+import { usePersistentState } from '../data/persistentState';
 import Loading from './Loading';
 import BookCard from './BookCard';
 import BookModal from './BookModal';
@@ -14,30 +15,32 @@ export default function BooksView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const shelfParam = searchParams.get('shelf');
 
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(12);
-  const [q, setQ] = useState('');
-  const [debouncedQ, setDebouncedQ] = useState('');
-  const [genre, setGenre] = useState('');
-  const [room, setRoom] = useState('');
-  const [shelf, setShelf] = useState('');
-  const [author, setAuthor] = useState('');
-  const [showPending, setShowPending] = useState(false);
+  const [page, setPage] = usePersistentState('books.page', 1);
+  const [pageSize, setPageSize] = usePersistentState('books.pageSize', 12);
+  const [q, setQ] = usePersistentState('books.q', '');
+  const [debouncedQ, setDebouncedQ] = usePersistentState('books.debouncedQ', '');
+  const [genre, setGenre] = usePersistentState('books.genre', '');
+  const [room, setRoom] = usePersistentState('books.room', '');
+  const [shelf, setShelf] = usePersistentState('books.shelf', '');
+  const [author, setAuthor] = usePersistentState('books.author', '');
+  const [showPending, setShowPending] = usePersistentState('books.showPending', false);
+  const [loan, setLoan] = usePersistentState<'' | 'out' | 'in'>('books.loan', '');
 
-  const [books, setBooks] = useState<Book[] | null>(null);
-  const [total, setTotal] = useState(0);
+  const [books, setBooks] = usePersistentState<Book[] | null>('books.books', null);
+  const [total, setTotal] = usePersistentState('books.total', 0);
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState<Book | 'new' | null>(null);
   const [detail, setDetail] = useState<Book | null>(null);
 
   // Debounce the search box
   useEffect(() => {
+    if (q === debouncedQ) return; // e.g. returning to the page with a remembered search
     const t = setTimeout(() => {
       setDebouncedQ(q);
       setPage(1);
     }, 300);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, debouncedQ, setDebouncedQ, setPage]);
 
   // A shelf selected from the rooms view arrives as ?shelf=<id>
   useEffect(() => {
@@ -47,6 +50,7 @@ export default function BooksView() {
     setGenre('');
     setRoom('');
     setAuthor('');
+    setLoan('');
     setShowPending(false);
     setPage(1);
     setSearchParams({}, { replace: true });
@@ -61,9 +65,10 @@ export default function BooksView() {
     if (room) p.set('room', room);
     if (shelf) p.set('shelf', shelf);
     if (author) p.set('author', author);
+    if (loan) p.set('loan', loan);
     if (showPending) p.set('status', 'pending');
     return p;
-  }, [page, pageSize, debouncedQ, genre, room, shelf, author, showPending]);
+  }, [page, pageSize, debouncedQ, genre, room, shelf, author, loan, showPending]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,6 +108,7 @@ export default function BooksView() {
     setRoom('');
     setShelf('');
     setAuthor('');
+    setLoan('');
     setShowPending(false);
     setPage(1);
   };
@@ -159,6 +165,11 @@ export default function BooksView() {
           {authors.map((a) => (
             <option key={a} value={a}>{a}</option>
           ))}
+        </select>
+        <select value={loan} onChange={(e) => { setLoan(e.target.value as '' | 'out' | 'in'); setPage(1); }}>
+          <option value="">כל הספרים</option>
+          <option value="out">מושאלים</option>
+          <option value="in">זמינים</option>
         </select>
         {pendingToggleVisible && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
