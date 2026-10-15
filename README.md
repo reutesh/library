@@ -40,6 +40,19 @@ npm start
 
 The app runs at [http://localhost:3000](http://localhost:3000)
 
+### Adding books from a photo (optional, free)
+
+Recognition runs on a local vision model through [Ollama](https://ollama.com) — no API key or cost. Install Ollama and download the model once (~6 GB):
+
+```bash
+brew install ollama
+ollama pull qwen2.5vl:7b
+```
+
+That's it — `npm run dev` / `npm start` start Ollama automatically if it isn't already running, and stop it when the app stops. The "📷 הוסף מתמונה" button appears once Ollama is up with the model installed. A scan takes roughly 10–30 seconds on an Apple Silicon Mac.
+
+Optional `.env` settings: `OLLAMA_MODEL` (another vision model), `OLLAMA_URL` (an Ollama on another machine), `OLLAMA_AUTOSTART=false` (don't start Ollama with the app).
+
 ### Development
 
 Run the API and the UI in separate terminals or use the combined script:
@@ -57,6 +70,7 @@ npm run dev:ui       # Vite UI on http://localhost:5173
 - Organize books into **rooms** and **shelves**
 - Full CRUD for books, rooms, and shelves (enforced on the server per role)
 - Server-side **pagination** for the books list
+- **Add books from a photo**: photograph several covers or spines at once; a free local vision model reads each title and author, and you confirm, correct, or untick each one before saving (likely duplicates and uncertain readings are flagged)
 - Search and filter books by title, author, genre, room, or shelf
 - Hebrew RTL interface
 
