@@ -27,6 +27,7 @@ interface Row {
   include: boolean;
   title: string;
   author: string;
+  genre: string;
   confidence: ScannedBook['confidence'] | null; // null = added by hand
   duplicate: boolean;
   status: 'idle' | 'saved' | 'error';
@@ -91,7 +92,7 @@ const confidenceLabels: Record<ScannedBook['confidence'], string> = {
 
 export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps) {
   const { me } = useAuth();
-  const { rooms, shelves } = useData();
+  const { rooms, shelves, genres } = useData();
   const cameraInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
   const nextKey = useRef(0);
@@ -105,6 +106,7 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [shelfId, setShelfId] = useState('');
+  const [allGenre, setAllGenre] = useState('');
 
   const editableRooms = rooms.filter((r) => canEditRoom(me, r.id));
   const selected = rows?.filter((r) => r.include && r.status !== 'saved' && r.title.trim()) ?? [];
@@ -131,6 +133,7 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
           include: !duplicates[i],
           title: b.title,
           author: b.author ?? '',
+          genre: allGenre,
           confidence: b.confidence,
           duplicate: duplicates[i],
           status: 'idle',
@@ -168,6 +171,14 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
     scan(photo, rotations[next]);
   };
 
+  /** The shared genre fills every unsaved row, except rows whose genre was changed by hand. */
+  const changeAllGenre = (value: string) => {
+    setRows((prev) => prev?.map((r) =>
+      r.status !== 'saved' && r.genre === allGenre ? { ...r, genre: value } : r,
+    ) ?? null);
+    setAllGenre(value);
+  };
+
   const updateRow = (key: number, changes: Partial<Row>) => {
     setRows((prev) => prev?.map((r) => (r.key === key ? { ...r, ...changes } : r)) ?? null);
   };
@@ -180,6 +191,7 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
         include: true,
         title: '',
         author: '',
+        genre: allGenre,
         confidence: null,
         duplicate: false,
         status: 'idle',
@@ -197,6 +209,7 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
         await api.createBook({
           title: row.title.trim(),
           author: row.author.trim() || null,
+          genre: row.genre.trim() || null,
           shelf_id: shelfId ? Number(shelfId) : null,
         });
         updateRow(row.key, { status: 'saved', error: undefined });
@@ -350,6 +363,14 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
                       disabled={row.status === 'saved' || saving}
                       onChange={(e) => updateRow(row.key, { author: e.target.value })}
                     />
+                    <input
+                      placeholder="ז'אנר"
+                      aria-label="ז'אנר"
+                      list="scan-genres"
+                      value={row.genre}
+                      disabled={row.status === 'saved' || saving}
+                      onChange={(e) => updateRow(row.key, { genre: e.target.value })}
+                    />
                     <div className="scan-tags">
                       {row.status === 'saved' && <span className="scan-tag scan-tag-ok">✓ נשמר</span>}
                       {row.status !== 'saved' && row.confidence && row.confidence !== 'high' && (
@@ -380,22 +401,42 @@ export default function ScanBooksModal({ onClose, onSaved }: ScanBooksModalProps
               + הוסף ספר שלא זוהה
             </button>
 
-            <div className="form-group scan-shelf">
-              <label htmlFor="scan-shelf">מיקום לכל הספרים</label>
-              <select id="scan-shelf" value={shelfId} onChange={(e) => setShelfId(e.target.value)} disabled={saving}>
-                <option value="">לא מוקצה</option>
-                {editableRooms.map((room) => (
-                  <optgroup key={room.id} label={room.name}>
-                    {shelves
-                      .filter((s) => s.roomId === room.id)
-                      .map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                  </optgroup>
-                ))}
-              </select>
+            <datalist id="scan-genres">
+              {genres.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+
+            <div className="form-row scan-common">
+              <div className="form-group">
+                <label htmlFor="scan-genre">ז'אנר לכל הספרים</label>
+                <input
+                  id="scan-genre"
+                  list="scan-genres"
+                  placeholder="אפשר גם לכל ספר בנפרד"
+                  value={allGenre}
+                  onChange={(e) => changeAllGenre(e.target.value)}
+                  disabled={saving}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="scan-shelf">מיקום לכל הספרים</label>
+                <select id="scan-shelf" value={shelfId} onChange={(e) => setShelfId(e.target.value)} disabled={saving}>
+                  <option value="">לא מוקצה</option>
+                  {editableRooms.map((room) => (
+                    <optgroup key={room.id} label={room.name}>
+                      {shelves
+                        .filter((s) => s.roomId === room.id)
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
             </div>
           </>
         )}
