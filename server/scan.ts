@@ -72,6 +72,38 @@ function clean(text: string): string {
   return text.replace(NIQQUD, '').replace(/\s+/g, ' ').trim();
 }
 
+/** Words that start a title phrase ("זכרונות של מכשף"), never an author's name. */
+const NOT_A_NAME_START = new Set(['של', 'את', 'על', 'עם', 'אל', 'מן', 'בין', 'לא', 'כי', 'אשר', 'the', 'of', 'and', 'a', 'in', 'to']);
+
+/**
+ * The model sometimes glues the author onto the title ("שם הטועם יובל אטיאס")
+ * and copies the previous book's author instead. When two or more titles in
+ * one photo end with the same 2–3 word name — a series shelved together — that
+ * name is almost certainly the author: move it out of the titles.
+ */
+function fixSeriesAuthors(books: ScannedBook[]): ScannedBook[] {
+  const words = books.map((b) => b.title.split(' '));
+  for (const size of [3, 2]) {
+    const counts = new Map<string, number>();
+    for (const w of words) {
+      if (w.length <= size) continue; // the title must keep at least one word
+      const suffix = w.slice(-size).join(' ');
+      counts.set(suffix, (counts.get(suffix) ?? 0) + 1);
+    }
+    for (const [suffix, count] of counts) {
+      const first = suffix.split(' ')[0].toLowerCase();
+      if (count < 2 || NOT_A_NAME_START.has(first) || /\d/.test(suffix)) continue;
+      books.forEach((b, i) => {
+        if (words[i].length > size && words[i].slice(-size).join(' ') === suffix) {
+          words[i] = words[i].slice(0, -size);
+          books[i] = { ...b, title: words[i].join(' '), author: suffix, confidence: b.confidence === 'low' ? 'low' : 'medium' };
+        }
+      });
+    }
+  }
+  return books;
+}
+
 /** True when the model's text looks garbled even if it claimed high confidence. */
 function looksGarbled(text: string): boolean {
   return FOREIGN_SCRIPT.test(text) || MIXED_WORD.test(text);
@@ -144,7 +176,7 @@ export async function scanBooks(imageBase64: string): Promise<ScannedBook[]> {
     throw new ScanUnavailableError('The model returned an unreadable answer. Try again.');
   }
 
-  return parsed.books
+  const books = parsed.books
     .map((b) => {
       const title = clean(b.title);
       const author = clean(b.author ?? '') || null;
@@ -155,4 +187,6 @@ export async function scanBooks(imageBase64: string): Promise<ScannedBook[]> {
       return { title, author, confidence: garbled || numberOnly ? 'low' : b.confidence } as ScannedBook;
     })
     .filter((b) => b.title);
+
+  return fixSeriesAuthors(books);
 }
