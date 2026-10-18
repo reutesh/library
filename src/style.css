@@ -962,6 +962,28 @@ nav {
   cursor: default;
 }
 
+.scan-shortcut {
+  display: block;
+  width: 100%;
+  margin-bottom: 1.25rem;
+  padding: 0.7rem 1rem;
+  border: 1px dashed #3498db;
+  border-radius: 6px;
+  background: #f0f7fd;
+  color: #2c3e50;
+  font-size: 0.92rem;
+  text-align: center;
+  cursor: pointer;
+}
+
+.scan-shortcut strong {
+  color: #3498db;
+}
+
+.scan-shortcut:hover {
+  background: #e3f0fb;
+}
+
 .scan-retry {
   margin-bottom: 0.5rem;
 }

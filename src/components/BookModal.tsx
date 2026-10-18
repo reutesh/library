@@ -7,9 +7,11 @@ interface BookModalProps {
   book: Book | null;
   onClose: () => void;
   onSaved: () => void;
+  /** When set (new books only), shows a shortcut to add several books from a photo. */
+  onScanPhoto?: () => void;
 }
 
-export default function BookModal({ book, onClose, onSaved }: BookModalProps) {
+export default function BookModal({ book, onClose, onSaved, onScanPhoto }: BookModalProps) {
   const { rooms, shelves, genres } = useData();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -57,6 +59,11 @@ export default function BookModal({ book, onClose, onSaved }: BookModalProps) {
   return (
     <Modal title={book ? 'ערוך ספר' : 'הוסף ספר'} onClose={onClose}>
       <form id="book-form" onSubmit={save}>
+        {!book && onScanPhoto && (
+          <button type="button" className="scan-shortcut" onClick={onScanPhoto}>
+            📷 יש לכם כמה ספרים? <strong>הוסיפו אותם מתמונה</strong>
+          </button>
+        )}
         <div className="form-group">
           <label htmlFor="book-title">כותרת *</label>
           <input

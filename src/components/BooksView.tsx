@@ -279,6 +279,10 @@ export default function BooksView() {
             setEditing(null);
             reload();
           }}
+          onScanPhoto={scanAvailable ? () => {
+            setEditing(null);
+            setScanning(true);
+          } : undefined}
         />
       )}
 
