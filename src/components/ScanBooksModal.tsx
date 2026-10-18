@@ -37,11 +37,12 @@ interface Row {
 type Layout = 'spines' | 'covers';
 
 /**
- * Rotations (clockwise degrees) to try, in order. Spine text usually runs
- * top-to-bottom (-90 makes it horizontal); "scan again" tries bottom-to-top.
+ * Rotations (clockwise degrees) to try, in order. Spine text runs
+ * top-to-bottom, so the letters face left on Hebrew books (90 makes them
+ * upright) and right on English ones (-90, tried by "scan again").
  */
 const ROTATIONS: Record<Layout, number[]> = {
-  spines: [-90, 90],
+  spines: [90, -90],
   covers: [0],
 };
 

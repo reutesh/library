@@ -150,7 +150,9 @@ export async function scanBooks(imageBase64: string): Promise<ScannedBook[]> {
       const author = clean(b.author ?? '') || null;
       // Small models sometimes slip Latin/Arabic/Chinese letters into Hebrew words — flag for review.
       const garbled = looksGarbled(title) || looksGarbled(author ?? '');
-      return { title, author, confidence: garbled ? 'low' : b.confidence } as ScannedBook;
+      // A bare number is usually a series number on the spine, not a title.
+      const numberOnly = /^\d+$/.test(title);
+      return { title, author, confidence: garbled || numberOnly ? 'low' : b.confidence } as ScannedBook;
     })
     .filter((b) => b.title);
 }
