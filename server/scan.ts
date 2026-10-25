@@ -2,22 +2,30 @@
  * server/scan.ts — recognize books in a photo with a local vision model
  *
  * The client sends one photo (base64) that may show several books — covers
- * or spines. A vision model running in Ollama (free, on this machine or any
- * machine reachable at OLLAMA_URL) returns the title and author it reads for
- * each book, which the user then confirms or corrects before anything is saved.
+ * or spines. A vision model returns the title and author it reads for each
+ * book, which the user then confirms or corrects before anything is saved.
+ *
+ * Two backends:
+ *   - Gemini (Google's free tier) when GEMINI_API_KEY is set — used on the
+ *     hosted site, where there is no local model.
+ *   - Ollama otherwise (free, on this machine or any machine at OLLAMA_URL).
  *
  * Config (all optional):
- *   OLLAMA_URL    – default http://localhost:11434
- *   OLLAMA_MODEL  – default qwen2.5vl:7b
+ *   GEMINI_API_KEY – a key from https://aistudio.google.com
+ *   GEMINI_MODEL   – default gemini-flash-latest
+ *   OLLAMA_URL     – default http://localhost:11434
+ *   OLLAMA_MODEL   – default qwen2.5vl:7b
  *
- * If Ollama isn't running or the model isn't pulled, the feature reports
- * itself as unavailable and the rest of the app works normally.
+ * If neither backend is ready, the feature reports itself as unavailable
+ * and the rest of the app works normally.
  */
 
 import { z } from 'zod';
 
 export const OLLAMA_URL = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/+$/, '');
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5vl:7b';
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 /**
  * Context window for the scan request. Ollama's default (4096 on a 16 GB Mac)
@@ -57,7 +65,10 @@ For each book:
 Never translate or transliterate: an English title stays in English, a Hebrew title stays in Hebrew, and the same goes for author names.
 Do not guess well-known titles — only write text you can actually see.
 Skip objects that are not books. If a spine is unreadable, skip it rather than inventing a title.
-If there are no readable books, return {"books": []}.`;
+If there are no readable books, return {"books": []}.
+
+Reply with JSON only, in this shape:
+{"books": [{"title": "...", "author": "..." or null, "confidence": "high" | "medium" | "low"}]}`;
 
 /** Scripts that never belong in a Hebrew/English library — a sign of misread letters. */
 const FOREIGN_SCRIPT = /[\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/;
@@ -129,15 +140,82 @@ export async function isOllamaUp(): Promise<boolean> {
   return (await installedModels()) !== null;
 }
 
-/** True when Ollama is reachable and the configured model is installed. */
+/** True when Gemini is configured, or Ollama is reachable with the configured model installed. */
 export async function isScanAvailable(): Promise<boolean> {
+  if (GEMINI_API_KEY) return true;
   // "qwen2.5vl" and "qwen2.5vl:latest" are the same model
   const wanted = OLLAMA_MODEL.includes(':') ? OLLAMA_MODEL : `${OLLAMA_MODEL}:latest`;
   return !!(await installedModels())?.includes(wanted);
 }
 
-/** Sends the photo to the local model and returns the books it recognized. */
-export async function scanBooks(imageBase64: string): Promise<ScannedBook[]> {
+/** Sends the photo to the configured vision model and returns the books it recognized. */
+export async function scanBooks(imageBase64: string, mediaType: ScanMediaType): Promise<ScannedBook[]> {
+  const content = GEMINI_API_KEY
+    ? await askGemini(imageBase64, mediaType)
+    : await askOllama(imageBase64);
+
+  let parsed: z.infer<typeof ScanResultSchema>;
+  try {
+    parsed = ScanResultSchema.parse(JSON.parse(content));
+  } catch {
+    console.error('[scan] unparseable model output:', content);
+    throw new ScanUnavailableError('The model returned an unreadable answer. Try again.');
+  }
+
+  const books = parsed.books
+    .map((b) => {
+      const title = clean(b.title);
+      const author = clean(b.author ?? '') || null;
+      // Models sometimes slip Latin/Arabic/Chinese letters into Hebrew words — flag for review.
+      const garbled = looksGarbled(title) || looksGarbled(author ?? '');
+      // A bare number is usually a series number on the spine, not a title.
+      const numberOnly = /^\d+$/.test(title);
+      return { title, author, confidence: garbled || numberOnly ? 'low' : b.confidence } as ScannedBook;
+    })
+    .filter((b) => b.title);
+
+  return fixSeriesAuthors(books);
+}
+
+/** Gemini generateContent call; returns the model's raw JSON text. */
+async function askGemini(imageBase64: string, mediaType: ScanMediaType): Promise<string> {
+  let res: globalThis.Response;
+  try {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+      signal: AbortSignal.timeout(SCAN_TIMEOUT_MS),
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inline_data: { mime_type: mediaType, data: imageBase64 } },
+            { text: PROMPT },
+          ],
+        }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+      }),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new ScanUnavailableError('Recognition took too long. Try a photo with fewer books.');
+    }
+    throw new ScanUnavailableError('Could not reach Gemini. Try again.');
+  }
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    if (res.status === 429) {
+      throw new ScanUnavailableError('Reached the free scan limit for now. Try again in a minute (or tomorrow).');
+    }
+    throw new Error(`Gemini error ${res.status}: ${body.error?.message ?? 'unknown'}`);
+  }
+
+  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  return data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+}
+
+/** Ollama chat call; returns the model's raw JSON text. */
+async function askOllama(imageBase64: string): Promise<string> {
   let res: globalThis.Response;
   try {
     res = await fetch(`${OLLAMA_URL}/api/chat`, {
@@ -168,25 +246,5 @@ export async function scanBooks(imageBase64: string): Promise<ScannedBook[]> {
   }
 
   const data = (await res.json()) as { message?: { content?: string } };
-  let parsed: z.infer<typeof ScanResultSchema>;
-  try {
-    parsed = ScanResultSchema.parse(JSON.parse(data.message?.content ?? ''));
-  } catch {
-    console.error('[scan] unparseable model output:', data.message?.content);
-    throw new ScanUnavailableError('The model returned an unreadable answer. Try again.');
-  }
-
-  const books = parsed.books
-    .map((b) => {
-      const title = clean(b.title);
-      const author = clean(b.author ?? '') || null;
-      // Small models sometimes slip Latin/Arabic/Chinese letters into Hebrew words — flag for review.
-      const garbled = looksGarbled(title) || looksGarbled(author ?? '');
-      // A bare number is usually a series number on the spine, not a title.
-      const numberOnly = /^\d+$/.test(title);
-      return { title, author, confidence: garbled || numberOnly ? 'low' : b.confidence } as ScannedBook;
-    })
-    .filter((b) => b.title);
-
-  return fixSeriesAuthors(books);
+  return data.message?.content ?? '';
 }

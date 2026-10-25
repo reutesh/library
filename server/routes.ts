@@ -783,7 +783,7 @@ router.post('/loans/:id/return', async (req: Request, res: Response) => {
 // 9. Photo scan — recognize books in a picture
 // ════════════════════════════════════════════════════════════
 
-/** GET /books/scan/status — whether photo recognition (Ollama + model) is ready. */
+/** GET /books/scan/status — whether photo recognition (Gemini, or Ollama + model) is ready. */
 router.get('/books/scan/status', async (_req: Request, res: Response) => {
   res.json({ available: await isScanAvailable() });
 });
@@ -806,7 +806,7 @@ router.post('/books/scan', async (req: Request, res: Response) => {
   }
 
   try {
-    res.json({ books: await scanBooks(image) });
+    res.json({ books: await scanBooks(image, media_type) });
   } catch (err) {
     if (!(err instanceof ScanUnavailableError)) throw err;
     res.status(503).json({ error: err.message });
