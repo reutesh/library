@@ -51,7 +51,7 @@ ollama pull qwen2.5vl:7b
 
 That's it — `npm run dev` / `npm start` start Ollama automatically if it isn't already running, and stop it when the app stops. The "📷 הוסף מתמונה" button appears once Ollama is up with the model installed. A scan takes roughly 10–30 seconds on an Apple Silicon Mac.
 
-On the hosted site (or anywhere without Ollama), set `GEMINI_API_KEY` instead — a free key from [Google AI Studio](https://aistudio.google.com). Scans then go to Gemini's free tier (a few seconds each, subject to its daily limit); `GEMINI_MODEL` picks another model. Without the key, Ollama is used as below.
+On the hosted site (or anywhere without Ollama), set `GEMINI_API_KEY` instead — a free key from [Google AI Studio](https://aistudio.google.com). Scans then go to Gemini's free tier (a few seconds each, subject to its daily limit); `GEMINI_MODEL` picks another model. Without the key, Ollama is used as above.
 
 Optional `.env` settings: `OLLAMA_MODEL` (another vision model), `OLLAMA_URL` (an Ollama on another machine), `OLLAMA_AUTOSTART=false` (don't start Ollama with the app).
 
