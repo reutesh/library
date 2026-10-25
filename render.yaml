@@ -1,0 +1,23 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# One Node web service: Express serves the API and the built client from dist/.
+services:
+  - type: web
+    name: library-manager
+    runtime: node
+    plan: free
+    region: frankfurt
+    # NODE_ENV=production would make plain `npm ci` skip the build tools (vite, tsc).
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "24"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
