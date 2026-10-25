@@ -13,6 +13,7 @@ import cookieParser from 'cookie-parser';
 import path from 'path';
 import { router } from './routes';
 import { bootstrapAdmin } from './auth';
+import { startOllamaIfNeeded } from './ollama';
 
 const missing = ['SUPABASE_URL', 'SUPABASE_KEY', 'SESSION_SECRET'].filter((k) => !process.env[k]);
 if (missing.length > 0) {
@@ -36,6 +37,8 @@ const clientDir = path.join(__dirname, '..', 'dist');
 
 // ── Middleware ───────────────────────────────────────────────
 app.disable('etag');
+// Photo scans carry a base64 image; everything else keeps the small default limit.
+app.use('/api/books/scan', express.json({ limit: '10mb' }));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -82,6 +85,8 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 bootstrapAdmin()
   .then(() => {
     app.listen(PORT, () => console.log(`Library Manager listening on http://localhost:${PORT}`));
+    // Photo scanning is optional — start Ollama in the background without delaying the app.
+    startOllamaIfNeeded();
   })
   .catch((err) => {
     console.error('[startup] Could not reach the database:', err);

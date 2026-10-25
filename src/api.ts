@@ -91,6 +91,12 @@ export interface BookInput {
   shelf_id?: number | null;
 }
 
+export interface ScannedBook {
+  title: string;
+  author: string | null;
+  confidence: 'high' | 'medium' | 'low';
+}
+
 interface ErrBody {
   error?: string;
 }
@@ -152,6 +158,16 @@ export const api = {
   },
   deleteBook(id: number) {
     return request<{ ok: boolean }>(`/books/${id}`, { method: 'DELETE' });
+  },
+  scanStatus() {
+    return request<{ available: boolean }>('/books/scan/status');
+  },
+  /** Recognize books in a photo. `image` is base64 without the data: prefix. */
+  scanBooks(image: string, media_type: string) {
+    return request<{ books: ScannedBook[] }>('/books/scan', {
+      method: 'POST',
+      body: JSON.stringify({ image, media_type }),
+    });
   },
   genres() {
     return request<string[]>('/genres');

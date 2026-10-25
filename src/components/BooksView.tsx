@@ -8,6 +8,7 @@ import Loading from './Loading';
 import BookCard from './BookCard';
 import BookModal from './BookModal';
 import BookDetailModal from './BookDetailModal';
+import ScanBooksModal from './ScanBooksModal';
 
 export default function BooksView() {
   const { me } = useAuth();
@@ -31,6 +32,14 @@ export default function BooksView() {
   const [reloadKey, setReloadKey] = useState(0);
   const [editing, setEditing] = useState<Book | 'new' | null>(null);
   const [detail, setDetail] = useState<Book | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanAvailable, setScanAvailable] = useState(false);
+
+  useEffect(() => {
+    api.scanStatus()
+      .then((s) => setScanAvailable(s.available))
+      .catch(() => setScanAvailable(false));
+  }, []);
 
   // Debounce the search box
   useEffect(() => {
@@ -135,6 +144,11 @@ export default function BooksView() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+          {scanAvailable && (
+            <button className="btn btn-secondary" onClick={() => setScanning(true)}>
+              📷 הוסף מתמונה
+            </button>
+          )}
           <button className="btn btn-primary" onClick={() => setEditing('new')}>
             + הוסף ספר
           </button>
@@ -263,6 +277,20 @@ export default function BooksView() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
+            reload();
+          }}
+          onScanPhoto={scanAvailable ? () => {
+            setEditing(null);
+            setScanning(true);
+          } : undefined}
+        />
+      )}
+
+      {scanning && (
+        <ScanBooksModal
+          onClose={() => setScanning(false)}
+          onSaved={() => {
+            setScanning(false);
             reload();
           }}
         />

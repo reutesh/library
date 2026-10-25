@@ -10,6 +10,7 @@
  *   6. Books CRUD (with pending-book workflow)
  *   7. Genre / author / stats endpoints
  *   8. Loans (lending / returning)
+ *   9. Photo scan (recognize books in a picture)
  *
  * Permission model:
  *   admin  — full access
@@ -51,6 +52,7 @@ import {
   deriveHash,
   SESSION_MAX_AGE_MS,
 } from './auth';
+import { scanBooks, isScanAvailable, ScanUnavailableError, SCAN_MEDIA_TYPES } from './scan';
 
 export const router = Router();
 
@@ -775,4 +777,38 @@ router.post('/loans/:id/return', async (req: Request, res: Response) => {
     returned_by: me.id,
   });
   res.json(toLoan(updated[0], null, me.username));
+});
+
+// ════════════════════════════════════════════════════════════
+// 9. Photo scan — recognize books in a picture
+// ════════════════════════════════════════════════════════════
+
+/** GET /books/scan/status — whether photo recognition (Ollama + model) is ready. */
+router.get('/books/scan/status', async (_req: Request, res: Response) => {
+  res.json({ available: await isScanAvailable() });
+});
+
+/**
+ * POST /books/scan — read titles / authors from a photo.
+ * Body: { image: base64 string (no data: prefix), media_type: 'image/jpeg' | ... }
+ * Returns { books: [{ title, author, confidence }] }. Nothing is saved —
+ * the client creates the books the user confirms via POST /books.
+ */
+router.post('/books/scan', async (req: Request, res: Response) => {
+  const { image, media_type } = req.body ?? {};
+  if (typeof image !== 'string' || !image) {
+    res.status(400).json({ error: 'image is required' });
+    return;
+  }
+  if (!SCAN_MEDIA_TYPES.includes(media_type)) {
+    res.status(400).json({ error: `media_type must be one of: ${SCAN_MEDIA_TYPES.join(', ')}` });
+    return;
+  }
+
+  try {
+    res.json({ books: await scanBooks(image) });
+  } catch (err) {
+    if (!(err instanceof ScanUnavailableError)) throw err;
+    res.status(503).json({ error: err.message });
+  }
 });
