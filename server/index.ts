@@ -37,6 +37,9 @@ const clientDir = path.join(__dirname, '..', 'dist');
 
 // ── Middleware ───────────────────────────────────────────────
 app.disable('etag');
+// Behind the host's proxy (Render etc.), req.ip must come from X-Forwarded-For,
+// otherwise the login rate limit would treat every visitor as one IP.
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 // Photo scans carry a base64 image; everything else keeps the small default limit.
 app.use('/api/books/scan', express.json({ limit: '10mb' }));
 app.use(express.json());
