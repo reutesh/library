@@ -3,7 +3,7 @@
  *
  * 1. The user says whether the photo shows spines or covers, then takes
  *    (or picks) the photo.
- * 2. The server asks a local vision model (Ollama) to read each book's title
+ * 2. The server asks a local vision model (Gemini or Ollama) to read each book's title
  *    and author. Small models can't read sideways text, so spine photos are
  *    rotated first to make the spine text horizontal.
  * 3. The user reviews the list — fix typos, untick wrong rows, add missed

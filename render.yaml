@@ -21,3 +21,6 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      # Photo scanning on the hosted site (free key: https://aistudio.google.com)
+      - key: GEMINI_API_KEY
+        sync: false

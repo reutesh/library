@@ -9,7 +9,7 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import { OLLAMA_URL, OLLAMA_MODEL, isOllamaUp, isScanAvailable } from './scan';
+import { GEMINI_API_KEY, OLLAMA_URL, OLLAMA_MODEL, isOllamaUp, isScanAvailable } from './scan';
 
 let child: ChildProcess | null = null;
 
@@ -25,7 +25,7 @@ function stopChild() {
 
 /** Starts `ollama serve` if needed. Never throws — scanning is optional. */
 export async function startOllamaIfNeeded(): Promise<void> {
-  if (process.env.OLLAMA_AUTOSTART === 'false' || !isLocal(OLLAMA_URL)) return;
+  if (GEMINI_API_KEY || process.env.OLLAMA_AUTOSTART === 'false' || !isLocal(OLLAMA_URL)) return;
   if (await isOllamaUp()) return reportModel();
 
   const { port } = new URL(OLLAMA_URL);
