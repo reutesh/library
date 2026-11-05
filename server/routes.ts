@@ -520,7 +520,9 @@ router.get('/books', async (req: Request, res: Response) => {
   if (req.query.genre) params.genre = `eq.${req.query.genre}`;
   if (req.query.author) params.author = `eq.${req.query.author}`;
 
-  if (req.query.shelf) {
+  if (req.query.shelf === 'none') {
+    params.shelf_id = 'is.null';
+  } else if (req.query.shelf) {
     params.shelf_id = `eq.${Number(req.query.shelf)}`;
   } else if (req.query.room) {
     const roomShelves = await supaGet<DbShelf>('shelves', {
