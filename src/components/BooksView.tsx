@@ -170,6 +170,8 @@ export default function BooksView() {
         </select>
         <select value={shelf} onChange={(e) => { setShelf(e.target.value); setPage(1); }}>
           <option value="">כל המדפים</option>
+          {/* Books without a shelf aren't in any room, so only offer this when no room is selected */}
+          {!room && <option value="none">לא מוקצה</option>}
           {shelfOptions.map((s) => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
